@@ -56,16 +56,14 @@ Visit http://localhost:8080/settings to:
 
 ## Updating
 
-After pushing a new image to the registry:
+After making code changes:
+
 ```bash
-# In Portainer: Stack → Pull and redeploy
-# Or on the command line:
-docker compose pull && docker compose up -d
+docker buildx build --platform linux/amd64,linux/arm64 -t dancet/goodwe-esa-monitor:latest . --push
 ```
 
-For a local dev rebuild:
+For a local dev rebuild without pushing:
 ```bash
-cd docker
 docker compose -f docker-compose.dev.yml up -d --build
 ```
 
