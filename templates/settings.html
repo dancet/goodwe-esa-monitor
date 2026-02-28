@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings &mdash; GoodWe ESA Monitor</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <div class="header-top">
+            <h1>&#9881; Settings</h1>
+            <a href="/" class="nav-link">&#8592; Monitor</a>
+        </div>
+    </header>
+
+    <div class="settings-container">
+
+        <div class="settings-section">
+            <h2>Meter Target Power Offset &mdash; Register 47120</h2>
+            <p class="description">
+                Signed 16-bit integer (&minus;32768 to 32767), in Watts.<br>
+                Positive = push export onto grid (prevents inrush imports).<br>
+                Negative = allow importing from grid.
+            </p>
+            <div class="current-value" id="current-47120">Loading&hellip;</div>
+            <div class="setting-row">
+                <label for="val-47120">New value (W):</label>
+                <input type="number" id="val-47120" min="-32768" max="32767" step="1" value="10">
+                <button onclick="saveSetting(47120)">Save</button>
+            </div>
+            <div class="feedback" id="feedback-47120"></div>
+        </div>
+
+        <div class="settings-section">
+            <h2>Grid Export Limit &mdash; Register 47510</h2>
+            <p class="description">
+                Unsigned integer (0 to 65535), in Watts.<br>
+                Maximum power allowed to export to the grid.
+            </p>
+            <div class="current-value" id="current-47510">Loading&hellip;</div>
+            <div class="setting-row">
+                <label for="val-47510">New value (W):</label>
+                <input type="number" id="val-47510" min="0" max="65535" step="100" value="2000">
+                <button onclick="saveSetting(47510)">Save</button>
+            </div>
+            <div class="feedback" id="feedback-47510"></div>
+        </div>
+
+        <div class="settings-section">
+            <h2>Connection</h2>
+            <p class="description">
+                Inverter network address and Modbus parameters.
+            </p>
+            <div class="setting-row">
+                <label for="val-ip">Inverter IP:</label>
+                <input type="text" id="val-ip" placeholder="192.168.1.x">
+            </div>
+            <div class="setting-row" style="margin-top:8px">
+                <label for="val-port">Modbus Port:</label>
+                <input type="number" id="val-port" min="1" max="65535" step="1">
+            </div>
+            <div class="setting-row" style="margin-top:8px">
+                <label for="val-slave">Slave ID:</label>
+                <input type="number" id="val-slave" min="1" max="247" step="1">
+            </div>
+            <div class="setting-row" style="margin-top:8px">
+                <label for="val-interval">Poll Interval (s):</label>
+                <input type="number" id="val-interval" min="5" max="300" step="1">
+            </div>
+            <div class="setting-row" style="margin-top:12px">
+                <button onclick="saveConnection()">Save Connection</button>
+            </div>
+            <div class="feedback" id="feedback-connection"></div>
+        </div>
+
+    </div>
+
+    <script>
+        async function loadSettings() {
+            try {
+                const [settingsResp, configResp] = await Promise.all([
+                    fetch('/api/settings'),
+                    fetch('/api/config'),
+                ]);
+                const data = await settingsResp.json();
+                const cfg = await configResp.json();
+
+                document.getElementById('val-ip').value = cfg.inverter_ip || '';
+                document.getElementById('val-port').value = cfg.modbus_port || 502;
+                document.getElementById('val-slave').value = cfg.slave_id || 247;
+                document.getElementById('val-interval').value = cfg.poll_interval || 5;
+
+                if (data.meter_target_power_offset) {
+                    const v = data.meter_target_power_offset.value;
+                    document.getElementById('current-47120').textContent = 'Current: ' + v + 'W';
+                    document.getElementById('val-47120').value = v;
+                } else {
+                    document.getElementById('current-47120').textContent = 'Current: (read error)';
+                }
+
+                if (data.grid_export_limit) {
+                    const v = data.grid_export_limit.value;
+                    document.getElementById('current-47510').textContent = 'Current: ' + v + 'W';
+                    document.getElementById('val-47510').value = v;
+                } else {
+                    document.getElementById('current-47510').textContent = 'Current: (read error)';
+                }
+            } catch (e) {
+                document.getElementById('current-47120').textContent = 'Current: (connection error)';
+                document.getElementById('current-47510').textContent = 'Current: (connection error)';
+            }
+        }
+
+        async function saveConnection() {
+            const feedback = document.getElementById('feedback-connection');
+            const ip = document.getElementById('val-ip').value.trim();
+            const port = parseInt(document.getElementById('val-port').value, 10);
+            const slave = parseInt(document.getElementById('val-slave').value, 10);
+            const interval = parseInt(document.getElementById('val-interval').value, 10);
+
+            if (!ip) {
+                feedback.textContent = 'Inverter IP cannot be empty';
+                feedback.className = 'feedback error';
+                return;
+            }
+
+            feedback.textContent = 'Saving\u2026';
+            feedback.className = 'feedback';
+
+            try {
+                const resp = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ inverter_ip: ip, modbus_port: port, slave_id: slave, poll_interval: interval }),
+                });
+                const result = await resp.json();
+
+                if (result.success) {
+                    feedback.textContent = '\u2713 Saved';
+                    feedback.className = 'feedback success';
+                } else {
+                    feedback.textContent = '\u2717 Error: ' + (result.error || 'Save failed');
+                    feedback.className = 'feedback error';
+                }
+            } catch (e) {
+                feedback.textContent = '\u2717 Network error: ' + e.message;
+                feedback.className = 'feedback error';
+            }
+        }
+
+        async function saveSetting(register) {
+            const input = document.getElementById('val-' + register);
+            const feedback = document.getElementById('feedback-' + register);
+            const value = parseInt(input.value, 10);
+
+            if (isNaN(value)) {
+                feedback.textContent = 'Invalid value';
+                feedback.className = 'feedback error';
+                return;
+            }
+
+            feedback.textContent = 'Saving\u2026';
+            feedback.className = 'feedback';
+
+            try {
+                const resp = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ register, value }),
+                });
+                const result = await resp.json();
+
+                if (result.success) {
+                    const verified = result.verified_value !== null ? result.verified_value : value;
+                    feedback.textContent = '\u2713 Saved. Verified: ' + verified + 'W';
+                    feedback.className = 'feedback success';
+                    document.getElementById('current-' + register).textContent = 'Current: ' + verified + 'W';
+                    input.value = verified;
+                } else {
+                    feedback.textContent = '\u2717 Error: ' + (result.error || 'Write failed');
+                    feedback.className = 'feedback error';
+                }
+            } catch (e) {
+                feedback.textContent = '\u2717 Network error: ' + e.message;
+                feedback.className = 'feedback error';
+            }
+        }
+
+        loadSettings();
+    </script>
+</body>
+</html>

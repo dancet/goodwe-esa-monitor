@@ -1,0 +1,18 @@
+name: goodwe-esa-monitor
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - goodwe-data:/data
+    environment:
+      - INVERTER_IP=${INVERTER_IP}
+      - MODBUS_PORT=502
+      - SLAVE_ID=247
+      - TZ=Australia/Brisbane
+    restart: unless-stopped
+
+volumes:
+  goodwe-data:

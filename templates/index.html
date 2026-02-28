@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoodWe ESA Monitor</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <div class="header-top">
+            <h1>&#9889; GoodWe ESA Monitor</h1>
+            <div class="status-indicator">
+                <div class="dot" id="status-dot"></div>
+                <span id="status-text">Connecting...</span>
+            </div>
+            <button id="resume-btn" class="resume-btn" style="display:none" onclick="resumeAutoScroll()">&#8595; Resume</button>
+            <a href="/settings" class="nav-link">Settings &#9881;</a>
+        </div>
+        <div class="header-daily" id="header-daily">—</div>
+    </header>
+    <div id="log"></div>
+
+    <script>
+        const log = document.getElementById('log');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const headerDaily = document.getElementById('header-daily');
+        const resumeBtn = document.getElementById('resume-btn');
+
+        let ws = null;
+        let reconnectTimer = null;
+        let autoScroll = true;
+
+        log.addEventListener('scroll', () => {
+            const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
+            if (atBottom) {
+                autoScroll = true;
+                resumeBtn.style.display = 'none';
+            } else if (autoScroll) {
+                autoScroll = false;
+                resumeBtn.style.display = '';
+            }
+        });
+
+        function fmtW(n)   { return Math.round(n).toLocaleString(); }
+        function fmtKwh(n) { return n.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:1}); }
+
+        function formatReading(reading) {
+            const d = reading.data;
+            const ts = (reading.date ? reading.date + ' ' : '') + reading.timestamp;
+
+            const soc = d.battery_soc !== undefined ? d.battery_soc.toFixed(0) : '?';
+            const temp = d.bms_temperature !== undefined ? d.bms_temperature.toFixed(0) + '\u00b0C' : '?\u00b0C';
+            const pvTotal = (d.ppv1 || 0) + (d.ppv2 || 0);
+
+            const battPower = d.pbattery || 0;
+            const battCurrent = d.ibattery || 0;
+            const gridPower = d.ac_active_power || 0;
+            const loadPower = d.total_load_power || 0;
+
+            let battStr;
+            if (d.ibattery !== undefined && Math.abs(battCurrent) > 0.5) {
+                if (battCurrent > 0) {
+                    battStr = '\u2b07\ufe0f  Discharge ' + fmtW(Math.abs(battPower)) + 'W';
+                } else {
+                    battStr = '\u2b06\ufe0f  Charge ' + fmtW(Math.abs(battPower)) + 'W';
+                }
+            } else if (d.pbattery !== undefined) {
+                battStr = '\u23f8\ufe0f  Idle';
+            } else {
+                battStr = '? Battery';
+            }
+
+            let gridStr = '';
+            if (d.ac_active_power !== undefined) {
+                const sign = gridPower >= 0 ? '+' : '';
+                gridStr = ' | \u2197\ufe0f Export ' + sign + fmtW(gridPower) + 'W';
+            }
+
+            return ts + ' | \ud83d\udd0b ' + soc + '% ' + temp +
+                   ' | \u2600\ufe0f PV ' + fmtW(pvTotal) + 'W' +
+                   ' | ' + battStr +
+                   gridStr +
+                   ' | \ud83c\udfe0 ' + fmtW(loadPower) + 'W';
+        }
+
+        function formatReadingMobile(reading) {
+            const d = reading.data;
+            const ts = reading.timestamp.slice(0, 5);
+
+            const soc = d.battery_soc !== undefined ? d.battery_soc.toFixed(0) : '?';
+            const temp = d.bms_temperature !== undefined ? d.bms_temperature.toFixed(0) + '\u00b0' : '?\u00b0';
+            const pvTotal = (d.ppv1 || 0) + (d.ppv2 || 0);
+
+            const battPower = d.pbattery || 0;
+            const battCurrent = d.ibattery || 0;
+            const gridPower = d.ac_active_power || 0;
+            const loadPower = d.total_load_power || 0;
+
+            let battStr;
+            if (d.ibattery !== undefined && Math.abs(battCurrent) > 0.5) {
+                battStr = (battCurrent > 0 ? '\u2193' : '\u2191') + fmtW(Math.abs(battPower)) + 'W';
+            } else {
+                battStr = '\u2014';
+            }
+
+            let gridStr = '?';
+            if (d.ac_active_power !== undefined) {
+                const sign = gridPower >= 0 ? '+' : '';
+                gridStr = '\u2197' + sign + fmtW(gridPower) + 'W';
+            }
+
+            return ts + ' \ud83d\udd0b' + soc + '% ' + temp +
+                   ' \u00b7 \u2600\ufe0f' + fmtW(pvTotal) + 'W' +
+                   ' \u00b7 ' + battStr +
+                   ' \u00b7 ' + gridStr +
+                   ' \u00b7 \ud83c\udfe0' + fmtW(loadPower) + 'W';
+        }
+
+        function updateHeaderDaily(reading) {
+            const d = reading.data;
+            if (d.pv_energy_day !== undefined &&
+                d.battery_charge_day !== undefined &&
+                d.battery_discharge_day !== undefined) {
+                headerDaily.textContent = 'Daily totals: \u2600\ufe0f Solar ' + fmtKwh(d.pv_energy_day) + 'kWh' +
+                    ' \u00b7 \ud83d\udd0b Chg ' + fmtKwh(d.battery_charge_day) + 'kWh' +
+                    ' \u00b7 Disch ' + fmtKwh(d.battery_discharge_day) + 'kWh';
+            }
+        }
+
+        function appendReading(reading) {
+            const line = document.createElement('div');
+            line.className = 'log-entry';
+            line.textContent = window.innerWidth < 600
+                ? formatReadingMobile(reading)
+                : formatReading(reading);
+            log.appendChild(line);
+            updateHeaderDaily(reading);
+            if (autoScroll) log.scrollTop = log.scrollHeight;
+        }
+
+        function resumeAutoScroll() {
+            autoScroll = true;
+            resumeBtn.style.display = 'none';
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function setConnected(connected) {
+            if (connected) {
+                statusDot.classList.add('live');
+                statusText.textContent = 'Live';
+            } else {
+                statusDot.classList.remove('live');
+                statusText.textContent = 'Disconnected';
+            }
+        }
+
+        function connect() {
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+
+            setConnected(false);
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(protocol + '//' + window.location.host + '/ws');
+
+            ws.onopen = () => {
+                setConnected(true);
+            };
+
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'history') {
+                    for (const reading of msg.readings) {
+                        appendReading(reading);
+                    }
+                } else if (msg.type === 'update') {
+                    appendReading(msg);
+                }
+            };
+
+            ws.onclose = () => {
+                setConnected(false);
+                reconnectTimer = setTimeout(connect, 5000);
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+        }
+
+        connect();
+    </script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+services:
+  app:
+    image: dancet/goodwe-esa-monitor:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - goodwe-esa-monitor-data:/data
+    environment:
+      - INVERTER_IP=192.168.1.x
+      - MODBUS_PORT=502
+      - SLAVE_ID=247
+      - TZ=Australia/Brisbane
+    restart: unless-stopped
+
+volumes:
+  goodwe-esa-monitor-data:
