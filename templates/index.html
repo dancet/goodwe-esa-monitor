@@ -4,7 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GoodWe ESA Monitor</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
     <link rel="stylesheet" href="/static/style.css">
+    <script>(function(){if(localStorage.getItem('theme')==='light')document.documentElement.classList.add('light-mode');}());</script>
 </head>
 <body>
     <header>
@@ -15,6 +17,7 @@
                 <span id="status-text">Connecting...</span>
             </div>
             <button id="resume-btn" class="resume-btn" style="display:none" onclick="resumeAutoScroll()">&#8595; Resume</button>
+            <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">&#9728;</button>
             <a href="/settings" class="nav-link">Settings &#9881;</a>
         </div>
         <div class="header-daily" id="header-daily">—</div>
@@ -124,8 +127,8 @@
                 d.battery_charge_day !== undefined &&
                 d.battery_discharge_day !== undefined) {
                 headerDaily.textContent = 'Daily totals: \u2600\ufe0f Solar ' + fmtKwh(d.pv_energy_day) + 'kWh' +
-                    ' \u00b7 \ud83d\udd0b Chg ' + fmtKwh(d.battery_charge_day) + 'kWh' +
-                    ' \u00b7 Disch ' + fmtKwh(d.battery_discharge_day) + 'kWh';
+                    ' \u00b7 \ud83d\udd0b Charge ' + fmtKwh(d.battery_charge_day) + 'kWh' +
+                    ' \u00b7 Discharge ' + fmtKwh(d.battery_discharge_day) + 'kWh';
             }
         }
 
@@ -191,6 +194,17 @@
                 ws.close();
             };
         }
+
+        function toggleTheme() {
+            const isLight = document.documentElement.classList.toggle('light-mode');
+            localStorage.setItem('theme', isLight ? 'light' : 'dark');
+            document.getElementById('theme-btn').textContent = isLight ? '\uD83C\uDF19' : '\u2600\uFE0F';
+        }
+
+        (function() {
+            const isLight = document.documentElement.classList.contains('light-mode');
+            document.getElementById('theme-btn').textContent = isLight ? '\uD83C\uDF19' : '\u2600\uFE0F';
+        }());
 
         connect();
     </script>

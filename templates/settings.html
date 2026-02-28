@@ -4,12 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings &mdash; GoodWe ESA Monitor</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
     <link rel="stylesheet" href="/static/style.css">
+    <script>(function(){if(localStorage.getItem('theme')==='light')document.documentElement.classList.add('light-mode');}());</script>
 </head>
 <body>
     <header>
         <div class="header-top">
             <h1>&#9881; Settings</h1>
+            <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">&#9728;</button>
             <a href="/" class="nav-link">&#8592; Monitor</a>
         </div>
     </header>
@@ -36,7 +39,8 @@
             <h2>Grid Export Limit &mdash; Register 47510</h2>
             <p class="description">
                 Unsigned integer (0 to 65535), in Watts.<br>
-                Maximum power allowed to export to the grid.
+                Maximum power allowed to export to the grid.<br>
+                Note: same as Power Limit Value in SolarGo under More &rsaquo; Advanced &rsaquo; Power Limit.
             </p>
             <div class="current-value" id="current-47510">Loading&hellip;</div>
             <div class="setting-row">
@@ -47,7 +51,7 @@
             <div class="feedback" id="feedback-47510"></div>
         </div>
 
-        <div class="settings-section">
+        <div class="settings-section" id="section-connection">
             <h2>Connection</h2>
             <p class="description">
                 Inverter network address and Modbus parameters.
@@ -186,6 +190,17 @@
                 feedback.className = 'feedback error';
             }
         }
+
+        function toggleTheme() {
+            const isLight = document.documentElement.classList.toggle('light-mode');
+            localStorage.setItem('theme', isLight ? 'light' : 'dark');
+            document.getElementById('theme-btn').textContent = isLight ? '\uD83C\uDF19' : '\u2600\uFE0F';
+        }
+
+        (function() {
+            const isLight = document.documentElement.classList.contains('light-mode');
+            document.getElementById('theme-btn').textContent = isLight ? '\uD83C\uDF19' : '\u2600\uFE0F';
+        }());
 
         loadSettings();
     </script>

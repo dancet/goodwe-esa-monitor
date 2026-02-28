@@ -351,7 +351,7 @@ async def post_config(body: ConfigWrite):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8080"))
+    port = int(os.environ.get("PORT", "8765"))
     print("GoodWe ESA Monitor")
     print(f"Opening on http://localhost:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port)

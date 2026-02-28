@@ -238,6 +238,33 @@ button:active {
     color: #c8dcc4;
 }
 
+/* ── Theme button ── */
+
+.theme-btn {
+    background: none;
+    border: 1px solid #2a3a28;
+    color: #9abc96;
+    font-family: monospace;
+    font-size: 13px;
+    padding: 4px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    letter-spacing: 0;
+}
+
+.theme-btn:hover {
+    background: #0a2a0a;
+    color: #c8dcc4;
+    border-color: #c8dcc4;
+}
+
+/* ── Connection section label alignment ── */
+
+#section-connection .setting-row label {
+    min-width: 140px;
+}
+
 /* ── Mobile ── */
 
 @media (max-width: 599px) {
@@ -247,4 +274,74 @@ button:active {
     .header-daily { font-size: 11px; width: 100%; }
     #log { font-size: 10px; padding: 4px 6px; }
     .log-entry { white-space: nowrap; overflow: hidden; }
+}
+
+/* ── Light mode ── */
+
+html.light-mode body {
+    background: #f0f4f0;
+    color: #1a3218;
+}
+
+html.light-mode header {
+    background: #ffffff;
+    border-bottom-color: #c0d8c0;
+}
+
+html.light-mode .header-daily { color: #4a7a48; }
+html.light-mode header h1 { color: #1a3218; }
+html.light-mode .status-indicator { color: #555; }
+html.light-mode .dot { background: #cc2222; }
+html.light-mode .dot.live { background: #3a7a3a; box-shadow: 0 0 6px #3a7a3a; }
+
+html.light-mode .nav-link { color: #3a6a3a; border-color: #c0d8c0; }
+html.light-mode .nav-link:hover { background: #e0f0e0; color: #1a3218; }
+
+html.light-mode .theme-btn { color: #3a6a3a; border-color: #c0d8c0; }
+html.light-mode .theme-btn:hover { background: #e0f0e0; color: #1a3218; border-color: #1a3218; }
+
+html.light-mode .settings-section { background: #ffffff; border-color: #c0d8c0; }
+html.light-mode .settings-section h2 { color: #1a3218; border-bottom-color: #c0d8c0; }
+html.light-mode .description { color: #666; }
+html.light-mode .current-value { color: #4a7a48; }
+html.light-mode label { color: #555; }
+
+html.light-mode input[type="number"],
+html.light-mode input[type="text"] {
+    background: #ffffff;
+    border-color: #80b080;
+    color: #1a3218;
+}
+
+html.light-mode input[type="number"]:focus,
+html.light-mode input[type="text"]:focus {
+    border-color: #1a3218;
+}
+
+html.light-mode button {
+    background: #e0f0e0;
+    border-color: #80b080;
+    color: #1a3218;
+}
+
+html.light-mode button:hover {
+    background: #c8e8c8;
+    border-color: #1a3218;
+}
+
+html.light-mode button:active { background: #b8d8b8; }
+
+html.light-mode .feedback { color: #999; }
+html.light-mode .feedback.success { color: #1a3218; }
+html.light-mode .feedback.error { color: #cc0000; }
+
+html.light-mode .resume-btn {
+    background: #e0f0e0;
+    border-color: #3a6a3a;
+    color: #3a6a3a;
+}
+
+html.light-mode .resume-btn:hover {
+    background: #c8e8c8;
+    color: #1a3218;
 }

@@ -13,7 +13,7 @@ Use the `docker-compose.yml` in the repo root — paste it into Portainer or run
 docker compose -f docker-compose.yml up -d
 ```
 
-Open http://localhost:8080 in your browser.
+Open http://localhost:8765 in your browser.
 
 ---
 
@@ -36,7 +36,7 @@ Set environment variables directly in the compose file (or via Portainer's Stack
 | `MODBUS_PORT` | `502` | Modbus TCP port |
 | `SLAVE_ID` | `247` | Modbus slave ID |
 | `TZ` | `Australia/Brisbane` | Timezone for timestamps (e.g. `Europe/London`, `America/New_York`) |
-| `PORT` | `8080` | Host port to expose the web UI on |
+| `PORT` | `8765` | Host port to expose the web UI on |
 
 Once running, connection details can also be changed via the Settings page — they are saved to `/data/config.json` inside the container and take precedence over environment variables on next startup.
 
@@ -50,7 +50,7 @@ Deploy as a Stack by pasting in `docker-compose.yml`. Set `INVERTER_IP` (and any
 
 ## Settings UI
 
-Visit http://localhost:8080/settings to:
+Visit http://localhost:8765/settings to:
 - Change the inverter connection details (IP, port, slave ID)
 - Read and write inverter registers (Meter Target Power Offset, Grid Export Limit)
 
