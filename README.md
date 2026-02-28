@@ -56,7 +56,7 @@ Visit http://localhost:8765/settings to:
 
 ---
 
-## Updating
+## Updating (reminder for the developer!)
 
 After making code changes:
 
