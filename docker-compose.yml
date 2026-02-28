@@ -2,7 +2,7 @@ services:
   app:
     image: dancet/goodwe-esa-monitor:latest
     ports:
-      - "${PORT:-8765}:8080"
+      - "${PORT:-8765}:${PORT:-8765}"
     volumes:
       - goodwe-esa-monitor-data:/data
     environment:
@@ -10,6 +10,7 @@ services:
       - MODBUS_PORT=502
       - SLAVE_ID=247
       - TZ=Australia/Brisbane
+      - PORT=${PORT:-8765}
     restart: unless-stopped
 
 volumes:
