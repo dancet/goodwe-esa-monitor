@@ -32,7 +32,7 @@ Set environment variables directly in the compose file (or via Portainer's Stack
 
 | Variable | Default | Description |
 |---|---|---|
-| `INVERTER_IP` | `192.168.107.225` | IP address of your GoodWe inverter |
+| `INVERTER_IP` | `192.168.1.x` | IP address of your GoodWe inverter |
 | `MODBUS_PORT` | `502` | Modbus TCP port |
 | `SLAVE_ID` | `247` | Modbus slave ID |
 
