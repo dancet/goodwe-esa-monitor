@@ -35,6 +35,8 @@ Set environment variables directly in the compose file (or via Portainer's Stack
 | `INVERTER_IP` | `192.168.1.x` | IP address of your GoodWe inverter |
 | `MODBUS_PORT` | `502` | Modbus TCP port |
 | `SLAVE_ID` | `247` | Modbus slave ID |
+| `TZ` | `Australia/Brisbane` | Timezone for timestamps (e.g. `Europe/London`, `America/New_York`) |
+| `PORT` | `8080` | Host port to expose the web UI on |
 
 Once running, connection details can also be changed via the Settings page — they are saved to `/data/config.json` inside the container and take precedence over environment variables on next startup.
 
