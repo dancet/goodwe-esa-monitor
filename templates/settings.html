@@ -171,7 +171,7 @@
                 const resp = await fetch('/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ register, value }),
+                    body: JSON.stringify({ register_address: register, value }),
                 });
                 const result = await resp.json();
 

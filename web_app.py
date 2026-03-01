@@ -3,6 +3,8 @@
 GoodWe ESA Monitor - Web App
 FastAPI + WebSockets live monitor and settings
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import os
@@ -288,13 +290,13 @@ async def get_settings():
 
 
 class SettingsWrite(BaseModel):
-    register: int
+    register_address: int
     value: int
 
 
 @app.post("/api/settings")
 async def post_settings(body: SettingsWrite):
-    register = body.register
+    register = body.register_address
     value = body.value
 
     if register not in (47120, 47510):
