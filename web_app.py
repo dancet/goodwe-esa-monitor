@@ -24,7 +24,7 @@ POLL_INTERVAL_MIN = 5
 _TZ = zoneinfo.ZoneInfo(os.environ.get("TZ", "Australia/Brisbane"))
 
 CONFIG_DEFAULTS = {
-    "inverter_ip":    os.environ.get("INVERTER_IP", "192.168.107.225"),
+    "inverter_ip":    os.environ.get("INVERTER_IP", "192.168.1.x"),
     "modbus_port":    int(os.environ.get("MODBUS_PORT", "502")),
     "slave_id":       int(os.environ.get("SLAVE_ID", "247")),
     "poll_interval":  max(POLL_INTERVAL_MIN, int(os.environ.get("POLL_INTERVAL", "5"))),
