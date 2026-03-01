@@ -2,6 +2,9 @@
 
 A live web monitor for GoodWe ESA hybrid inverter/battery systems. Reads data via Modbus TCP and displays it in a real-time dashboard with WebSocket streaming. Includes a settings page for adjusting inverter registers.
 
+<img src="goodwe-esa-monitor.png" width="600" alt="Monitor dashboard">
+<img src="goodwe-esa-monitor-settings.png" width="600" alt="Settings page">
+
 ---
 
 ## Quick start (pre-built image)
