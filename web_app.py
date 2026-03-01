@@ -125,6 +125,7 @@ async def read_inverter_data():
 
     data = {}
     for name, (address, count, scale, unit, _) in MONITOR_REGISTERS.items():
+        await asyncio.sleep(0)  # yield between reads so the event loop can handle incoming connections
         try:
             result = await client.read_holding_registers(
                 address=address,
@@ -361,4 +362,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8765"))
     print("GoodWe ESA Monitor")
     print(f"Opening on http://localhost:{port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, ws_ping_interval=20, ws_ping_timeout=20)
