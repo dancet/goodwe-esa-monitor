@@ -76,8 +76,9 @@ MONITOR_REGISTERS = {
 SIGNED_REGISTERS = {'ibattery', 'pbattery', 'ac_active_power', 'total_load_power'}
 
 history: deque = deque(maxlen=500)
-active_connections: list[WebSocket] = []
+active_connections: set[WebSocket] = set()
 update_count: int = 0
+_modbus_client: AsyncModbusTcpClient | None = None
 
 
 def decode_register_value(registers, count, scale, signed=True):
@@ -92,46 +93,62 @@ def decode_register_value(registers, count, scale, signed=True):
     return value * scale
 
 
-async def read_inverter_data():
+def _reset_client():
+    global _modbus_client
+    if _modbus_client is not None:
+        _modbus_client.close()
+        _modbus_client = None
+
+
+async def _get_client() -> AsyncModbusTcpClient | None:
+    global _modbus_client
+    if _modbus_client is not None and _modbus_client.connected:
+        return _modbus_client
+    _reset_client()
     client = AsyncModbusTcpClient(
         host=config['inverter_ip'],
         port=config['modbus_port'],
         timeout=10,
         retries=3,
     )
-    try:
-        if not await client.connect():
-            return None
+    if await client.connect():
+        _modbus_client = client
+        return client
+    client.close()
+    return None
 
-        data = {}
-        for name, (address, count, scale, unit, _) in MONITOR_REGISTERS.items():
-            try:
-                result = await client.read_holding_registers(
-                    address=address,
-                    count=count,
-                    slave=config['slave_id'],
-                )
-                if not result.isError():
-                    value = decode_register_value(
-                        result.registers, count, scale,
-                        signed=(name in SIGNED_REGISTERS),
-                    )
-                    # Sanity checks
-                    if name == 'vbattery' and (value < 40 or value > 600):
-                        continue
-                    if name == 'battery_soc' and (value < 0 or value > 100):
-                        continue
-                    if name == 'bms_temperature' and (value < -20 or value > 80):
-                        continue
-                    data[name] = value
-            except Exception:
-                pass
 
-        return data if data else None
-    except Exception:
+async def read_inverter_data():
+    client = await _get_client()
+    if client is None:
         return None
-    finally:
-        client.close()
+
+    data = {}
+    for name, (address, count, scale, unit, _) in MONITOR_REGISTERS.items():
+        try:
+            result = await client.read_holding_registers(
+                address=address,
+                count=count,
+                slave=config['slave_id'],
+            )
+            if not result.isError():
+                value = decode_register_value(
+                    result.registers, count, scale,
+                    signed=(name in SIGNED_REGISTERS),
+                )
+                # Sanity checks
+                if name == 'vbattery' and (value < 40 or value > 600):
+                    continue
+                if name == 'battery_soc' and (value < 0 or value > 100):
+                    continue
+                if name == 'bms_temperature' and (value < -20 or value > 80):
+                    continue
+                data[name] = value
+        except Exception:
+            _reset_client()
+            break
+
+    return data if data else None
 
 
 async def inverter_poller():
@@ -157,8 +174,7 @@ async def inverter_poller():
                     except Exception:
                         dead.append(ws)
                 for ws in dead:
-                    if ws in active_connections:
-                        active_connections.remove(ws)
+                    active_connections.discard(ws)
         except Exception:
             pass
 
@@ -174,6 +190,7 @@ async def lifespan(app: FastAPI):
         await task
     except asyncio.CancelledError:
         pass
+    _reset_client()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -193,7 +210,7 @@ async def settings_page():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    active_connections.append(websocket)
+    active_connections.add(websocket)
 
     last_50 = list(history)[-50:]
     if last_50:
@@ -205,19 +222,14 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception:
         pass
     finally:
-        if websocket in active_connections:
-            active_connections.remove(websocket)
+        active_connections.discard(websocket)
 
 
 async def read_register_raw(address: int):
-    client = AsyncModbusTcpClient(
-        host=config['inverter_ip'],
-        port=config['modbus_port'],
-        timeout=10,
-    )
+    client = await _get_client()
+    if client is None:
+        return None
     try:
-        if not await client.connect():
-            return None
         result = await client.read_holding_registers(
             address=address,
             count=1,
@@ -227,20 +239,15 @@ async def read_register_raw(address: int):
             return result.registers[0]
         return None
     except Exception:
+        _reset_client()
         return None
-    finally:
-        client.close()
 
 
 async def write_register_raw(address: int, raw_value: int) -> bool:
-    client = AsyncModbusTcpClient(
-        host=config['inverter_ip'],
-        port=config['modbus_port'],
-        timeout=10,
-    )
+    client = await _get_client()
+    if client is None:
+        return False
     try:
-        if not await client.connect():
-            return False
         result = await client.write_register(
             address=address,
             value=raw_value,
@@ -248,9 +255,8 @@ async def write_register_raw(address: int, raw_value: int) -> bool:
         )
         return not result.isError()
     except Exception:
+        _reset_client()
         return False
-    finally:
-        client.close()
 
 
 @app.get("/api/settings")
@@ -346,6 +352,7 @@ async def post_config(body: ConfigWrite):
     config['slave_id'] = body.slave_id
     config['poll_interval'] = body.poll_interval
     _save_config()
+    _reset_client()
 
     return {"success": True}
 
