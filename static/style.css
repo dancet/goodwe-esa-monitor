@@ -259,6 +259,89 @@ button:active {
     border-color: #c8dcc4;
 }
 
+/* ── SOC schedule ── */
+
+select,
+input[type="time"] {
+    background: #111;
+    border: 1px solid #2a5a2a;
+    color: #c8dcc4;
+    font-family: monospace;
+    font-size: 14px;
+    padding: 5px 10px;
+    border-radius: 3px;
+}
+
+select:focus,
+input[type="time"]:focus {
+    outline: none;
+    border-color: #c8dcc4;
+}
+
+.schedule-header {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid #2a3a28;
+    margin-bottom: 12px;
+}
+
+.schedule-enable-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #c8dcc4;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.schedule-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 12px;
+    font-size: 13px;
+}
+
+.schedule-table th {
+    color: #555;
+    font-weight: normal;
+    text-align: left;
+    padding: 4px 8px;
+    border-bottom: 1px solid #2a3a28;
+}
+
+.schedule-table td {
+    padding: 6px 8px;
+    color: #c8dcc4;
+    border-bottom: 1px solid #1a2a18;
+}
+
+.schedule-add-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.unit-label {
+    color: #888;
+    font-size: 13px;
+}
+
+.remove-btn {
+    background: none;
+    border: 1px solid #3a2020;
+    color: #885555;
+    font-size: 11px;
+    padding: 2px 7px;
+    letter-spacing: 0;
+}
+
+.remove-btn:hover {
+    background: #2a1010;
+    border-color: #885555;
+    color: #cc6666;
+}
+
 /* ── Connection section label alignment ── */
 
 #section-connection .setting-row label {
@@ -334,6 +417,30 @@ html.light-mode button:active { background: #b8d8b8; }
 html.light-mode .feedback { color: #999; }
 html.light-mode .feedback.success { color: #1a3218; }
 html.light-mode .feedback.error { color: #cc0000; }
+
+html.light-mode select,
+html.light-mode input[type="time"] {
+    background: #ffffff;
+    border-color: #80b080;
+    color: #1a3218;
+}
+
+html.light-mode .schedule-header { border-top-color: #c0d8c0; }
+html.light-mode .schedule-enable-label { color: #1a3218; }
+html.light-mode .schedule-table th { color: #888; border-bottom-color: #c0d8c0; }
+html.light-mode .schedule-table td { color: #1a3218; border-bottom-color: #e0f0e0; }
+html.light-mode .unit-label { color: #666; }
+
+html.light-mode .remove-btn {
+    border-color: #d0a0a0;
+    color: #884444;
+}
+
+html.light-mode .remove-btn:hover {
+    background: #ffe0e0;
+    border-color: #884444;
+    color: #cc2222;
+}
 
 html.light-mode .resume-btn {
     background: #e0f0e0;

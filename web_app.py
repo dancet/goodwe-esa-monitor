@@ -6,15 +6,17 @@ FastAPI + WebSockets live monitor and settings
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
+import re
 import zoneinfo
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -32,9 +34,22 @@ CONFIG_DEFAULTS = {
     "poll_interval":  max(POLL_INTERVAL_MIN, int(os.environ.get("POLL_INTERVAL", "5"))),
 }
 
+SOC_LIMIT_REGISTER = 47760
+
+# Default schedule template: raise to 100% Saturday morning, restore to 90% Sunday evening.
+# Disabled by default until the user enables it via settings.
+_SOC_SCHEDULE_TEMPLATE: dict = {
+    "enabled": False,
+    "entries": [
+        {"day": 5, "time": "07:00", "value": 100, "enabled": True},
+        {"day": 6, "time": "22:00", "value": 90,  "enabled": True},
+    ],
+}
+
 
 def _load_config() -> dict:
     cfg = dict(CONFIG_DEFAULTS)
+    cfg["soc_schedule"] = copy.deepcopy(_SOC_SCHEDULE_TEMPLATE)
     if CONFIG_PATH.exists():
         try:
             cfg.update(json.loads(CONFIG_PATH.read_text()))
@@ -154,6 +169,37 @@ async def read_inverter_data():
     return data if data else None
 
 
+_scheduler_last_applied: dict[tuple, str] = {}
+_scheduler_last_tick: str = "never"
+
+
+async def soc_scheduler():
+    """Apply scheduled SOC limit changes once per configured day/time."""
+    global _scheduler_last_tick
+    while True:
+        try:
+            schedule = config.get("soc_schedule", {})
+            now = datetime.now(_TZ)
+            current_day = now.weekday()  # 0=Mon … 6=Sun
+            current_time = now.strftime('%H:%M')
+            today = now.strftime('%Y-%m-%d')
+            _scheduler_last_tick = now.strftime('%Y-%m-%d %H:%M:%S')
+            if schedule.get("enabled"):
+                for entry in schedule.get("entries", []):
+                    if not entry.get("enabled", True):
+                        continue
+                    if entry["day"] == current_day and entry["time"] == current_time:
+                        key = (entry["day"], entry["time"])
+                        if _scheduler_last_applied.get(key) != today:
+                            print(f"[soc_scheduler] Firing: day={entry['day']} time={entry['time']} value={entry['value']}")
+                            success = await write_register_raw(SOC_LIMIT_REGISTER, entry["value"])
+                            print(f"[soc_scheduler] Write result: {success}")
+                            _scheduler_last_applied[key] = today
+        except Exception as e:
+            print(f"[soc_scheduler] ERROR: {e}")
+        await asyncio.sleep(30)
+
+
 async def inverter_poller():
     global update_count
     while True:
@@ -186,13 +232,17 @@ async def inverter_poller():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(inverter_poller())
+    tasks = [
+        asyncio.create_task(inverter_poller()),
+        asyncio.create_task(soc_scheduler()),
+    ]
     yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    for task in tasks:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     _reset_client()
 
 
@@ -260,6 +310,93 @@ async def write_register_raw(address: int, raw_value: int) -> bool:
     except Exception:
         _reset_client()
         return False
+
+
+@app.get("/api/debug/schedule")
+async def debug_schedule():
+    now = datetime.now(_TZ)
+    schedule = config.get("soc_schedule", {})
+    entries = schedule.get("entries", [])
+    current_day = now.weekday()
+    current_time = now.strftime('%H:%M')
+    today = now.strftime('%Y-%m-%d')
+    return {
+        "server_time": now.strftime('%Y-%m-%d %H:%M:%S %Z'),
+        "current_day": current_day,
+        "current_time": current_time,
+        "schedule_enabled": schedule.get("enabled", False),
+        "entries": entries,
+        "last_applied": {f"{k[0]}@{k[1]}": v for k, v in _scheduler_last_applied.items()},
+        "scheduler_last_tick": _scheduler_last_tick,
+        "matches_right_now": [
+            e for e in entries
+            if e.get("enabled", True)
+            and e["day"] == current_day
+            and e["time"] == current_time
+            and _scheduler_last_applied.get((e["day"], e["time"])) != today
+        ],
+    }
+
+
+@app.get("/api/soc-limit")
+async def get_soc_limit():
+    raw = await read_register_raw(SOC_LIMIT_REGISTER)
+    if raw is None:
+        return {"value": None, "register": SOC_LIMIT_REGISTER}
+    return {"value": raw, "register": SOC_LIMIT_REGISTER}
+
+
+class SocLimitWrite(BaseModel):
+    value: int
+
+
+@app.post("/api/soc-limit")
+async def post_soc_limit(body: SocLimitWrite):
+    if not (0 <= body.value <= 100):
+        return {"success": False, "error": "Value must be 0–100"}
+    success = await write_register_raw(SOC_LIMIT_REGISTER, body.value)
+    if not success:
+        return {"success": False, "error": "Write failed"}
+    await asyncio.sleep(0.5)
+    verified = await read_register_raw(SOC_LIMIT_REGISTER)
+    return {"success": True, "verified_value": verified}
+
+
+@app.get("/api/soc-schedule")
+async def get_soc_schedule():
+    return config.get("soc_schedule", copy.deepcopy(_SOC_SCHEDULE_TEMPLATE))
+
+
+class ScheduleEntry(BaseModel):
+    day: int    # 0=Mon … 6=Sun
+    time: str   # HH:MM
+    value: int  # 0–100
+    enabled: bool = True
+
+
+class SocScheduleWrite(BaseModel):
+    enabled: bool
+    entries: list[ScheduleEntry]
+
+
+@app.post("/api/soc-schedule")
+async def post_soc_schedule(body: SocScheduleWrite):
+    for entry in body.entries:
+        if not (0 <= entry.day <= 6):
+            return {"success": False, "error": "Day must be 0–6"}
+        if not re.match(r'^\d{2}:\d{2}$', entry.time):
+            return {"success": False, "error": "Time must be HH:MM"}
+        if not (0 <= entry.value <= 100):
+            return {"success": False, "error": "Limit must be 0–100"}
+    config["soc_schedule"] = {
+        "enabled": body.enabled,
+        "entries": [
+            {"day": e.day, "time": e.time, "value": e.value, "enabled": e.enabled}
+            for e in body.entries
+        ],
+    }
+    _save_config()
+    return {"success": True}
 
 
 @app.get("/api/settings")

@@ -51,6 +51,61 @@
             <div class="feedback" id="feedback-47510"></div>
         </div>
 
+        <div class="settings-section">
+            <h2>SOC Upper Limit &mdash; Register 47760</h2>
+            <p class="description">
+                Hard cap on battery charge level (0&ndash;100%).<br>
+                Normally 90% for longevity; raise to 100% for a weekly balance charge.
+            </p>
+            <div class="current-value" id="current-soc-limit">Loading&hellip;</div>
+            <div class="setting-row">
+                <label for="val-soc-limit">Set limit (%):</label>
+                <input type="number" id="val-soc-limit" min="0" max="100" step="1" value="90" style="width:80px">
+                <button onclick="setSocLimit()">Set now</button>
+            </div>
+            <div class="feedback" id="feedback-soc-limit"></div>
+
+            <div class="schedule-header">
+                <label class="schedule-enable-label">
+                    <input type="checkbox" id="schedule-enabled"> Automatic weekly schedule
+                </label>
+            </div>
+
+            <table class="schedule-table">
+                <thead>
+                    <tr>
+                        <th>Day</th>
+                        <th>Time</th>
+                        <th>Limit</th>
+                        <th>On</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="schedule-rows"></tbody>
+            </table>
+
+            <div class="schedule-add-row">
+                <select id="add-day">
+                    <option value="0">Monday</option>
+                    <option value="1">Tuesday</option>
+                    <option value="2">Wednesday</option>
+                    <option value="3">Thursday</option>
+                    <option value="4">Friday</option>
+                    <option value="5" selected>Saturday</option>
+                    <option value="6">Sunday</option>
+                </select>
+                <input type="time" id="add-time" value="07:00">
+                <input type="number" id="add-value" min="0" max="100" step="1" value="100" style="width:70px">
+                <span class="unit-label">%</span>
+                <button onclick="addScheduleEntry()">+ Add</button>
+            </div>
+
+            <div class="setting-row" style="margin-top:14px">
+                <button onclick="saveSchedule()">Save schedule</button>
+            </div>
+            <div class="feedback" id="feedback-schedule"></div>
+        </div>
+
         <div class="settings-section" id="section-connection">
             <h2>Connection</h2>
             <p class="description">
@@ -81,6 +136,9 @@
     </div>
 
     <script>
+        const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        let socSchedule = { enabled: false, entries: [] };
+
         async function loadSettings() {
             try {
                 const [settingsResp, configResp] = await Promise.all([
@@ -202,7 +260,134 @@
             document.getElementById('theme-btn').textContent = isLight ? '\uD83C\uDF19' : '\u2600\uFE0F';
         }());
 
+        async function loadSocSection() {
+            try {
+                const resp = await fetch('/api/soc-limit');
+                const data = await resp.json();
+                if (data.value !== null) {
+                    document.getElementById('current-soc-limit').textContent = 'Current: ' + data.value + '%';
+                    document.getElementById('val-soc-limit').value = data.value;
+                } else {
+                    document.getElementById('current-soc-limit').textContent = 'Current: (read error)';
+                }
+            } catch(e) {
+                document.getElementById('current-soc-limit').textContent = 'Current: (connection error)';
+            }
+            try {
+                const resp = await fetch('/api/soc-schedule');
+                socSchedule = await resp.json();
+                document.getElementById('schedule-enabled').checked = socSchedule.enabled;
+                renderScheduleRows();
+            } catch(e) {}
+        }
+
+        async function setSocLimit() {
+            const input = document.getElementById('val-soc-limit');
+            const feedback = document.getElementById('feedback-soc-limit');
+            const value = parseInt(input.value, 10);
+            if (isNaN(value) || value < 0 || value > 100) {
+                feedback.textContent = 'Value must be 0\u2013100';
+                feedback.className = 'feedback error';
+                return;
+            }
+            feedback.textContent = 'Setting\u2026';
+            feedback.className = 'feedback';
+            try {
+                const resp = await fetch('/api/soc-limit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ value }),
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    const v = result.verified_value !== null ? result.verified_value : value;
+                    feedback.textContent = '\u2713 Set. Verified: ' + v + '%';
+                    feedback.className = 'feedback success';
+                    document.getElementById('current-soc-limit').textContent = 'Current: ' + v + '%';
+                    input.value = v;
+                } else {
+                    feedback.textContent = '\u2717 ' + (result.error || 'Failed');
+                    feedback.className = 'feedback error';
+                }
+            } catch(e) {
+                feedback.textContent = '\u2717 Network error';
+                feedback.className = 'feedback error';
+            }
+        }
+
+        function renderScheduleRows() {
+            const tbody = document.getElementById('schedule-rows');
+            tbody.innerHTML = '';
+            socSchedule.entries.forEach((entry, i) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td>' + DAY_NAMES[entry.day] + '</td>' +
+                    '<td>' + entry.time + '</td>' +
+                    '<td>' + entry.value + '%</td>' +
+                    '<td><input type="checkbox"' + (entry.enabled ? ' checked' : '') +
+                        ' onchange="toggleEntry(' + i + ')"></td>' +
+                    '<td><button class="remove-btn" onclick="removeEntry(' + i + ')">\u2715</button></td>';
+                tbody.appendChild(tr);
+            });
+        }
+
+        function toggleEntry(i) {
+            socSchedule.entries[i].enabled = !socSchedule.entries[i].enabled;
+        }
+
+        function removeEntry(i) {
+            socSchedule.entries.splice(i, 1);
+            renderScheduleRows();
+        }
+
+        function addScheduleEntry() {
+            const feedback = document.getElementById('feedback-schedule');
+            const day   = parseInt(document.getElementById('add-day').value, 10);
+            const time  = document.getElementById('add-time').value;
+            const value = parseInt(document.getElementById('add-value').value, 10);
+            if (!time) {
+                feedback.textContent = 'Please enter a time';
+                feedback.className = 'feedback error';
+                return;
+            }
+            if (isNaN(value) || value < 0 || value > 100) {
+                feedback.textContent = 'Limit must be 0\u2013100%';
+                feedback.className = 'feedback error';
+                return;
+            }
+            feedback.textContent = '';
+            socSchedule.entries.push({ day, time, value, enabled: true });
+            socSchedule.entries.sort((a, b) => a.day !== b.day ? a.day - b.day : a.time.localeCompare(b.time));
+            renderScheduleRows();
+        }
+
+        async function saveSchedule() {
+            const feedback = document.getElementById('feedback-schedule');
+            socSchedule.enabled = document.getElementById('schedule-enabled').checked;
+            feedback.textContent = 'Saving\u2026';
+            feedback.className = 'feedback';
+            try {
+                const resp = await fetch('/api/soc-schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(socSchedule),
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    feedback.textContent = '\u2713 Schedule saved';
+                    feedback.className = 'feedback success';
+                } else {
+                    feedback.textContent = '\u2717 ' + (result.error || 'Save failed');
+                    feedback.className = 'feedback error';
+                }
+            } catch(e) {
+                feedback.textContent = '\u2717 Network error';
+                feedback.className = 'feedback error';
+            }
+        }
+
         loadSettings();
+        loadSocSection();
     </script>
 </body>
 </html>
