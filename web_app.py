@@ -77,8 +77,7 @@ MONITOR_REGISTERS = {
     # Grid power
     'ac_active_power': (35139, 2, 1, 'W', 'Grid Power'),
 
-    # Load
-    'total_load_power': (35171, 2, 1, 'W', 'House Load'),
+    # Load is derived (see read_inverter_data)
 
     # BMS data
     'battery_soc': (37007, 1, 1, '%', 'Battery SOC'),
@@ -90,7 +89,7 @@ MONITOR_REGISTERS = {
     'battery_discharge_day': (35211, 1, 0.1, 'kWh', 'Discharged Today'),
 }
 
-SIGNED_REGISTERS = {'ibattery', 'pbattery', 'ac_active_power', 'total_load_power'}
+SIGNED_REGISTERS = {'ibattery', 'pbattery', 'ac_active_power'}
 
 history: deque = deque(maxlen=500)
 active_connections: set[WebSocket] = set()
@@ -165,6 +164,16 @@ async def read_inverter_data():
         except Exception:
             _reset_client()
             break
+
+    # Compute house load from energy balance: battery + pv - grid_export
+    # Works in both grid-connected and backup modes
+    if 'pbattery' in data or 'ppv1' in data or 'ppv2' in data or 'ac_active_power' in data:
+        data['total_load_power'] = round(
+            data.get('pbattery', 0) +
+            data.get('ppv1', 0) +
+            data.get('ppv2', 0) -
+            data.get('ac_active_power', 0)
+        )
 
     return data if data else None
 

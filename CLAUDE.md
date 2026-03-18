@@ -5,7 +5,7 @@
 - `git status`, `git diff`, `git log`
 - `git add`, `git commit`, `git push`
 - `python3 web_app.py`
-- `python3 probe_registers.py` (any flags)
+- `python3 probe_registers.py` (any flags, including piped through `grep`, `awk`, `head`)
 - `python3 -c "..."`
 - `docker buildx build` (any flags)
 - `docker compose up --build`
