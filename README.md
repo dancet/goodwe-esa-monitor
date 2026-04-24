@@ -41,7 +41,7 @@ Set environment variables directly in the compose file (or via Portainer's Stack
 | `TZ` | `Australia/Brisbane` | Timezone for timestamps (e.g. `Europe/London`, `America/New_York`) |
 | `PORT` | `8765` | Host port to expose the web UI on |
 
-Once running, connection details can also be changed via the Settings page — they are saved to `/data/config.json` inside the container and take precedence over environment variables on next startup.
+Once running, connection details can also be changed via the Settings page — they are saved to `/data/inverter_config.json` inside the container and take precedence over environment variables on next startup.
 
 ---
 

@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from pymodbus.client import AsyncModbusTcpClient
 import uvicorn
 
-CONFIG_PATH = Path(os.environ.get("DATA_DIR", ".")) / "config.json"
+CONFIG_PATH = Path(os.environ.get("DATA_DIR", ".")) / "inverter_config.json"
 POLL_INTERVAL_MIN = 5
 _TZ = zoneinfo.ZoneInfo(os.environ.get("TZ", "Australia/Brisbane"))
 

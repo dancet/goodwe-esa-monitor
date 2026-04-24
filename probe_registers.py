@@ -25,7 +25,7 @@ from pymodbus.client import AsyncModbusTcpClient
 # --------------------------------------------------------------------------- #
 # Config (mirrors web_app.py)
 # --------------------------------------------------------------------------- #
-CONFIG_PATH = Path(os.environ.get("DATA_DIR", ".")) / "config.json"
+CONFIG_PATH = Path(os.environ.get("DATA_DIR", ".")) / "inverter_config.json"
 CONFIG_DEFAULTS = {
     "inverter_ip":  os.environ.get("INVERTER_IP", "192.168.1.x"),
     "modbus_port":  int(os.environ.get("MODBUS_PORT", "502")),

@@ -1,5 +1,6 @@
 # Local secrets
 .env
+inverter_config.json
 
 # Python
 __pycache__/
