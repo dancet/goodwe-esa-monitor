@@ -35,6 +35,9 @@ CONFIG_DEFAULTS = {
 }
 
 SOC_LIMIT_REGISTER = 47760
+GRID_EXPORT_REGISTER = 47510
+
+EVERY_DAY = -1  # schedule entry day value meaning "repeat daily"
 
 # Default schedule template: raise to 100% Saturday morning, restore to 90% Sunday evening.
 # Disabled by default until the user enables it via settings.
@@ -46,10 +49,21 @@ _SOC_SCHEDULE_TEMPLATE: dict = {
     ],
 }
 
+# Default export schedule: throttle export during the evening peak, restore overnight.
+# Disabled by default until the user enables it via settings.
+_EXPORT_SCHEDULE_TEMPLATE: dict = {
+    "enabled": False,
+    "entries": [
+        {"day": EVERY_DAY, "time": "17:00", "value": 250,  "enabled": True},
+        {"day": EVERY_DAY, "time": "22:00", "value": 5000, "enabled": True},
+    ],
+}
+
 
 def _load_config() -> dict:
     cfg = dict(CONFIG_DEFAULTS)
     cfg["soc_schedule"] = copy.deepcopy(_SOC_SCHEDULE_TEMPLATE)
+    cfg["export_schedule"] = copy.deepcopy(_EXPORT_SCHEDULE_TEMPLATE)
     if CONFIG_PATH.exists():
         try:
             cfg.update(json.loads(CONFIG_PATH.read_text()))
@@ -209,6 +223,211 @@ async def soc_scheduler():
         await asyncio.sleep(30)
 
 
+_TIME_RE = re.compile(r'^([01]\d|2[0-3]):([0-5]\d)$')
+_WEEK_MINUTES = 7 * 24 * 60
+
+
+def _week_minute(day: int, time_str: str) -> int:
+    hh, mm = time_str.split(':')
+    return day * 1440 + int(hh) * 60 + int(mm)
+
+
+def _expand_slots(entries: list) -> list[tuple]:
+    """Expand schedule entries into concrete week slots, sorted by time-of-week.
+
+    An entry with day == EVERY_DAY expands to one slot per weekday. Slots are
+    (week_minute, value, key) where key identifies the originating entry.
+    Where a daily entry and a specific-day entry collide on the same minute the
+    specific-day entry sorts later, so it wins as the active slot.
+    """
+    slots = []
+    for entry in entries or []:
+        if not entry.get("enabled", True):
+            continue
+        try:
+            day = int(entry["day"])
+            value = int(entry["value"])
+            time_str = str(entry["time"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not _TIME_RE.match(time_str):
+            continue
+        if day == EVERY_DAY:
+            days = range(7)
+        elif 0 <= day <= 6:
+            days = [day]
+        else:
+            continue
+        key = (day, time_str)
+        for d in days:
+            slots.append((_week_minute(d, time_str), value, key))
+    slots.sort(key=lambda s: (s[0], 0 if s[2][0] == EVERY_DAY else 1))
+    return slots
+
+
+def _now_week_minute(now: datetime) -> int:
+    return now.weekday() * 1440 + now.hour * 60 + now.minute
+
+
+def _active_slot(entries: list, now: datetime):
+    """The slot in force right now: the most recent one at or before now.
+
+    If nothing has fired yet this week it wraps to the final slot of the week,
+    which is the one that was applied before the week rolled over.
+    """
+    slots = _expand_slots(entries)
+    if not slots:
+        return None
+    now_min = _now_week_minute(now)
+    active = None
+    for slot in slots:
+        if slot[0] <= now_min:
+            active = slot
+        else:
+            break
+    return active if active is not None else slots[-1]
+
+
+def _next_slot(entries: list, now: datetime):
+    """The next slot due to fire after now, wrapping into next week."""
+    slots = _expand_slots(entries)
+    if not slots:
+        return None
+    now_min = _now_week_minute(now)
+    for slot in slots:
+        if slot[0] > now_min:
+            return slot
+    return slots[0]
+
+
+def _describe_slot(slot) -> dict | None:
+    if slot is None:
+        return None
+    week_minute, value, key = slot
+    day = week_minute // 1440
+    return {
+        "day": day,
+        "day_name": DAY_NAMES[day],
+        "time": key[1],
+        "value": value,
+        "daily": key[0] == EVERY_DAY,
+    }
+
+
+DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+_export_state: dict = {
+    "last_tick": "never",
+    "last_action": "not started",
+    "last_write": None,
+    "last_error": None,
+    "override": None,
+}
+
+EXPORT_RECONCILE_INTERVAL = 30
+_OVERRIDE_MAX_AGE = 24 * 3600
+
+
+async def _reconcile_export_limit(now: datetime) -> None:
+    """Drive the export limit register towards whatever the schedule says it
+    should be right now.
+
+    This is deliberately a convergence loop rather than a fire-at-this-minute
+    trigger: if the app was down, the tick was late, the write failed, or the
+    value was changed elsewhere (e.g. in SolarGo), the next pass still corrects
+    it. Missing a transition would otherwise leave the export limit wide open
+    through the evening peak.
+    """
+    schedule = config.get("export_schedule") or {}
+
+    if not schedule.get("enabled"):
+        _export_state["override"] = None
+        _export_state["last_action"] = "schedule disabled"
+        return
+
+    slot = _active_slot(schedule.get("entries", []), now)
+    if slot is None:
+        _export_state["last_action"] = "no enabled entries"
+        return
+
+    _, target, key = slot
+
+    # A manual "Set now" holds until the schedule moves on to a different entry,
+    # so a deliberate override isn't stomped 30 seconds later.
+    override = _export_state.get("override")
+    if override is not None:
+        stale = (now - override["set_at"]).total_seconds() > _OVERRIDE_MAX_AGE
+        if override["key"] == key and not stale:
+            _export_state["last_action"] = (
+                f"manual override held at {override['value']}W until next entry"
+            )
+            return
+        _export_state["override"] = None
+
+    current = await read_register_raw(GRID_EXPORT_REGISTER)
+    if current is None:
+        _export_state["last_error"] = f"{now:%Y-%m-%d %H:%M:%S} read failed"
+        _export_state["last_action"] = "read failed — will retry"
+        return
+
+    if current == target:
+        _export_state["last_action"] = f"in sync at {target}W"
+        return
+
+    print(f"[export_scheduler] Correcting export limit {current}W -> {target}W "
+          f"(entry {key[0]}@{key[1]})")
+    ok = await write_register_raw(GRID_EXPORT_REGISTER, target)
+    if not ok:
+        _export_state["last_error"] = f"{now:%Y-%m-%d %H:%M:%S} write failed"
+        _export_state["last_action"] = f"write to {target}W failed — will retry"
+        print("[export_scheduler] Write FAILED, retrying next pass")
+        return
+
+    await asyncio.sleep(0.5)
+    verified = await read_register_raw(GRID_EXPORT_REGISTER)
+    _export_state["last_write"] = (
+        f"{now:%Y-%m-%d %H:%M:%S} set {current}W → {target}W "
+        f"(verified {verified if verified is not None else '?'}W)"
+    )
+    if verified is not None and verified != target:
+        _export_state["last_action"] = (
+            f"wrote {target}W but read back {verified}W — will retry"
+        )
+        print(f"[export_scheduler] Verify mismatch: wanted {target}, got {verified}")
+    else:
+        _export_state["last_action"] = f"applied {target}W"
+        _export_state["last_error"] = None
+        print(f"[export_scheduler] Applied {target}W")
+
+
+def _note_export_override(value: int, now: datetime | None = None) -> None:
+    """Record a manual export-limit write so the reconciler backs off until the
+    schedule reaches its next entry."""
+    schedule = config.get("export_schedule") or {}
+    if not schedule.get("enabled"):
+        return
+    now = now or datetime.now(_TZ)
+    slot = _active_slot(schedule.get("entries", []), now)
+    if slot is None:
+        return
+    _export_state["override"] = {"key": slot[2], "value": value, "set_at": now}
+    print(f"[export_scheduler] Manual override {value}W held until entry after "
+          f"{slot[2][0]}@{slot[2][1]}")
+
+
+async def export_scheduler():
+    while True:
+        now = datetime.now(_TZ)
+        try:
+            await _reconcile_export_limit(now)
+        except Exception as e:
+            _export_state["last_error"] = f"{now:%Y-%m-%d %H:%M:%S} {e}"
+            _export_state["last_action"] = "error — will retry"
+            print(f"[export_scheduler] ERROR: {e}")
+        _export_state["last_tick"] = now.strftime('%Y-%m-%d %H:%M:%S')
+        await asyncio.sleep(EXPORT_RECONCILE_INTERVAL)
+
+
 async def inverter_poller():
     global update_count
     while True:
@@ -244,6 +463,7 @@ async def lifespan(app: FastAPI):
     tasks = [
         asyncio.create_task(inverter_poller()),
         asyncio.create_task(soc_scheduler()),
+        asyncio.create_task(export_scheduler()),
     ]
     yield
     for task in tasks:
@@ -408,6 +628,83 @@ async def post_soc_schedule(body: SocScheduleWrite):
     return {"success": True}
 
 
+@app.get("/api/export-schedule")
+async def get_export_schedule():
+    return config.get("export_schedule", copy.deepcopy(_EXPORT_SCHEDULE_TEMPLATE))
+
+
+class ExportScheduleEntry(BaseModel):
+    day: int    # -1 = every day, else 0=Mon … 6=Sun
+    time: str   # HH:MM
+    value: int  # Watts, 0–65535
+    enabled: bool = True
+
+
+class ExportScheduleWrite(BaseModel):
+    enabled: bool
+    entries: list[ExportScheduleEntry]
+
+
+@app.post("/api/export-schedule")
+async def post_export_schedule(body: ExportScheduleWrite):
+    for entry in body.entries:
+        if entry.day != EVERY_DAY and not (0 <= entry.day <= 6):
+            return {"success": False, "error": "Day must be Every day or 0–6"}
+        if not _TIME_RE.match(entry.time):
+            return {"success": False, "error": f"Invalid time '{entry.time}' (expected HH:MM)"}
+        if not (0 <= entry.value <= 65535):
+            return {"success": False, "error": "Export limit must be 0–65535 W"}
+
+    enabled_entries = [e for e in body.entries if e.enabled]
+    if body.enabled and not enabled_entries:
+        return {"success": False, "error": "Enable at least one entry, or turn the schedule off"}
+
+    # Guard against a schedule that can never fully define a day: with a single
+    # entry the limit would be pinned to that value forever.
+    if body.enabled and len(enabled_entries) < 2:
+        return {"success": False, "error": "A schedule needs at least two entries to cycle between"}
+
+    config["export_schedule"] = {
+        "enabled": body.enabled,
+        "entries": [
+            {"day": e.day, "time": e.time, "value": e.value, "enabled": e.enabled}
+            for e in body.entries
+        ],
+    }
+    _save_config()
+    # Drop any manual override and converge immediately rather than waiting for
+    # the next tick, so the UI reflects reality straight after saving.
+    _export_state["override"] = None
+    now = datetime.now(_TZ)
+    try:
+        await _reconcile_export_limit(now)
+    except Exception as e:
+        print(f"[export_scheduler] immediate reconcile failed: {e}")
+    return {"success": True}
+
+
+@app.get("/api/export-schedule/status")
+async def get_export_schedule_status():
+    now = datetime.now(_TZ)
+    schedule = config.get("export_schedule") or {}
+    entries = schedule.get("entries", [])
+    override = _export_state.get("override")
+    return {
+        "server_time": now.strftime('%Y-%m-%d %H:%M:%S %Z'),
+        "enabled": schedule.get("enabled", False),
+        "active": _describe_slot(_active_slot(entries, now)),
+        "next": _describe_slot(_next_slot(entries, now)),
+        "override": (
+            {"value": override["value"], "set_at": override["set_at"].strftime('%H:%M:%S')}
+            if override else None
+        ),
+        "last_tick": _export_state["last_tick"],
+        "last_action": _export_state["last_action"],
+        "last_write": _export_state["last_write"],
+        "last_error": _export_state["last_error"],
+    }
+
+
 @app.get("/api/settings")
 async def get_settings():
     raw_47120 = await read_register_raw(47120)
@@ -460,6 +757,8 @@ async def post_settings(body: SettingsWrite):
     success = await write_register_raw(register, raw)
 
     if success:
+        if register == GRID_EXPORT_REGISTER:
+            _note_export_override(value)
         await asyncio.sleep(0.5)
         verify_raw = await read_register_raw(register)
         if verify_raw is not None:

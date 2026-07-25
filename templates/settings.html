@@ -49,6 +49,56 @@
                 <button onclick="saveSetting(47510)">Save</button>
             </div>
             <div class="feedback" id="feedback-47510"></div>
+
+            <div class="schedule-header">
+                <label class="schedule-enable-label">
+                    <input type="checkbox" id="export-schedule-enabled" onchange="refreshExportStatus()">
+                    Automatic export limit schedule
+                </label>
+            </div>
+
+            <p class="description">
+                The limit is held at whatever the most recent entry says &mdash; checked every 30
+                seconds, so a restart, a failed write, or a change made in SolarGo is corrected
+                automatically rather than left until the next transition.
+            </p>
+
+            <div class="schedule-status" id="export-schedule-status">Loading&hellip;</div>
+
+            <table class="schedule-table">
+                <thead>
+                    <tr>
+                        <th>Day</th>
+                        <th>From</th>
+                        <th>Limit</th>
+                        <th>On</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="export-schedule-rows"></tbody>
+            </table>
+
+            <div class="schedule-add-row">
+                <select id="export-add-day">
+                    <option value="-1" selected>Every day</option>
+                    <option value="0">Monday</option>
+                    <option value="1">Tuesday</option>
+                    <option value="2">Wednesday</option>
+                    <option value="3">Thursday</option>
+                    <option value="4">Friday</option>
+                    <option value="5">Saturday</option>
+                    <option value="6">Sunday</option>
+                </select>
+                <input type="time" id="export-add-time" value="17:00">
+                <input type="number" id="export-add-value" min="0" max="65535" step="50" value="250" style="width:90px">
+                <span class="unit-label">W</span>
+                <button onclick="addExportEntry()">+ Add</button>
+            </div>
+
+            <div class="setting-row" style="margin-top:14px">
+                <button onclick="saveExportSchedule()">Save schedule</button>
+            </div>
+            <div class="feedback" id="feedback-export-schedule"></div>
         </div>
 
         <div class="settings-section">
@@ -386,8 +436,167 @@
             }
         }
 
+        // ── Export limit schedule ──
+
+        let exportSchedule = { enabled: false, entries: [] };
+
+        function exportDayLabel(day) {
+            return day === -1 ? 'Every day' : DAY_NAMES[day];
+        }
+
+        function renderExportRows() {
+            const tbody = document.getElementById('export-schedule-rows');
+            tbody.innerHTML = '';
+            if (!exportSchedule.entries.length) {
+                tbody.innerHTML = '<tr><td colspan="5" style="opacity:.6">No entries yet</td></tr>';
+                return;
+            }
+            exportSchedule.entries.forEach((entry, i) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td>' + exportDayLabel(entry.day) + '</td>' +
+                    '<td>' + entry.time + '</td>' +
+                    '<td>' + entry.value + 'W</td>' +
+                    '<td><input type="checkbox"' + (entry.enabled ? ' checked' : '') +
+                        ' onchange="toggleExportEntry(' + i + ')"></td>' +
+                    '<td><button class="remove-btn" onclick="removeExportEntry(' + i + ')">✕</button></td>';
+                tbody.appendChild(tr);
+            });
+        }
+
+        function sortExportEntries() {
+            // Every-day entries sort before specific-day entries at the same time,
+            // matching the server's precedence rule.
+            exportSchedule.entries.sort((a, b) =>
+                a.time !== b.time ? a.time.localeCompare(b.time) : a.day - b.day);
+        }
+
+        function toggleExportEntry(i) {
+            exportSchedule.entries[i].enabled = !exportSchedule.entries[i].enabled;
+        }
+
+        function removeExportEntry(i) {
+            exportSchedule.entries.splice(i, 1);
+            renderExportRows();
+        }
+
+        function addExportEntry() {
+            const feedback = document.getElementById('feedback-export-schedule');
+            const day   = parseInt(document.getElementById('export-add-day').value, 10);
+            const time  = document.getElementById('export-add-time').value;
+            const value = parseInt(document.getElementById('export-add-value').value, 10);
+            if (!time) {
+                feedback.textContent = 'Please enter a time';
+                feedback.className = 'feedback error';
+                return;
+            }
+            if (isNaN(value) || value < 0 || value > 65535) {
+                feedback.textContent = 'Limit must be 0–65535 W';
+                feedback.className = 'feedback error';
+                return;
+            }
+            if (exportSchedule.entries.some(e => e.day === day && e.time === time)) {
+                feedback.textContent = 'An entry for that day and time already exists';
+                feedback.className = 'feedback error';
+                return;
+            }
+            feedback.textContent = '';
+            feedback.className = 'feedback';
+            exportSchedule.entries.push({ day, time, value, enabled: true });
+            sortExportEntries();
+            renderExportRows();
+        }
+
+        async function saveExportSchedule() {
+            const feedback = document.getElementById('feedback-export-schedule');
+            exportSchedule.enabled = document.getElementById('export-schedule-enabled').checked;
+            feedback.textContent = 'Saving…';
+            feedback.className = 'feedback';
+            try {
+                const resp = await fetch('/api/export-schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(exportSchedule),
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    feedback.textContent = '✓ Schedule saved';
+                    feedback.className = 'feedback success';
+                    await refreshExportStatus();
+                    // The server converges the register on save; reflect the new reading.
+                    loadSettings();
+                } else {
+                    feedback.textContent = '✗ ' + (result.error || 'Save failed');
+                    feedback.className = 'feedback error';
+                }
+            } catch(e) {
+                feedback.textContent = '✗ Network error';
+                feedback.className = 'feedback error';
+            }
+        }
+
+        async function refreshExportStatus() {
+            const el = document.getElementById('export-schedule-status');
+            const checked = document.getElementById('export-schedule-enabled').checked;
+            try {
+                const resp = await fetch('/api/export-schedule/status');
+                const s = await resp.json();
+
+                if (!checked) {
+                    el.textContent = 'Schedule off — export limit is left alone.';
+                    el.className = 'schedule-status';
+                    return;
+                }
+                if (!s.enabled) {
+                    el.textContent = 'Not active yet — press "Save schedule" to apply.';
+                    el.className = 'schedule-status pending';
+                    return;
+                }
+                if (!s.active) {
+                    el.textContent = 'No enabled entries — nothing is being applied.';
+                    el.className = 'schedule-status pending';
+                    return;
+                }
+
+                let text = 'Holding ' + s.active.value + 'W'
+                    + ' (from ' + s.active.time + (s.active.daily ? ' daily' : ' ' + s.active.day_name) + ')';
+                if (s.next) {
+                    text += ' → ' + s.next.value + 'W at ' + s.next.time
+                        + (s.next.daily ? '' : ' ' + s.next.day_name);
+                }
+                if (s.override) {
+                    text += ' — manual override ' + s.override.value + 'W active until next entry';
+                }
+                el.textContent = text;
+                el.className = 'schedule-status' + (s.last_error ? ' error' : ' active');
+                if (s.last_error) {
+                    el.textContent += ' — last error: ' + s.last_error;
+                }
+            } catch(e) {
+                el.textContent = 'Status unavailable';
+                el.className = 'schedule-status';
+            }
+        }
+
+        async function loadExportSection() {
+            try {
+                const resp = await fetch('/api/export-schedule');
+                const data = await resp.json();
+                exportSchedule = {
+                    enabled: !!data.enabled,
+                    entries: Array.isArray(data.entries) ? data.entries : [],
+                };
+                document.getElementById('export-schedule-enabled').checked = exportSchedule.enabled;
+                sortExportEntries();
+                renderExportRows();
+            } catch(e) {}
+            refreshExportStatus();
+        }
+
         loadSettings();
         loadSocSection();
+        loadExportSection();
+        setInterval(refreshExportStatus, 30000);
     </script>
 </body>
 </html>

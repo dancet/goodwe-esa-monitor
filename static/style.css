@@ -327,6 +327,32 @@ input[type="time"]:focus {
     font-size: 13px;
 }
 
+.schedule-status {
+    font-size: 13px;
+    color: #888;
+    background: #111;
+    border-left: 3px solid #2a3a28;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    border-radius: 3px;
+    line-height: 1.5;
+}
+
+.schedule-status.active {
+    color: #7ab648;
+    border-left-color: #7ab648;
+}
+
+.schedule-status.pending {
+    color: #c9a227;
+    border-left-color: #c9a227;
+}
+
+.schedule-status.error {
+    color: #cc6666;
+    border-left-color: #cc6666;
+}
+
 .remove-btn {
     background: none;
     border: 1px solid #3a2020;
@@ -430,6 +456,14 @@ html.light-mode .schedule-enable-label { color: #1a3218; }
 html.light-mode .schedule-table th { color: #888; border-bottom-color: #c0d8c0; }
 html.light-mode .schedule-table td { color: #1a3218; border-bottom-color: #e0f0e0; }
 html.light-mode .unit-label { color: #666; }
+html.light-mode .schedule-status {
+    background: #f0f6ee;
+    border-left-color: #c0d8c0;
+    color: #666;
+}
+html.light-mode .schedule-status.active { color: #3d7a1f; border-left-color: #3d7a1f; }
+html.light-mode .schedule-status.pending { color: #8a6d0b; border-left-color: #8a6d0b; }
+html.light-mode .schedule-status.error { color: #cc0000; border-left-color: #cc0000; }
 
 html.light-mode .remove-btn {
     border-color: #d0a0a0;
