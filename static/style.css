@@ -259,6 +259,17 @@ button:active {
     border-color: #c8dcc4;
 }
 
+/* ── Pause button ── */
+
+.pause-btn.paused {
+    color: #e0b030;
+    border-color: #e0b030;
+}
+
+.dot.paused {
+    background: #e0b030;
+}
+
 /* ── SOC schedule ── */
 
 select,
@@ -408,6 +419,8 @@ html.light-mode .nav-link:hover { background: #e0f0e0; color: #1a3218; }
 
 html.light-mode .theme-btn { color: #3a6a3a; border-color: #c0d8c0; }
 html.light-mode .theme-btn:hover { background: #e0f0e0; color: #1a3218; border-color: #1a3218; }
+html.light-mode .pause-btn.paused { color: #8a6d0b; border-color: #8a6d0b; }
+html.light-mode .dot.paused { background: #b08a10; }
 
 html.light-mode .settings-section { background: #ffffff; border-color: #c0d8c0; }
 html.light-mode .settings-section h2 { color: #1a3218; border-bottom-color: #c0d8c0; }

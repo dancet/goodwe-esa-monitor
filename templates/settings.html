@@ -12,6 +12,7 @@
     <header>
         <div class="header-top">
             <h1>&#9881; Settings</h1>
+            <button id="pause-btn" class="theme-btn pause-btn" onclick="togglePause()" title="Stop all inverter communication (e.g. while using SolarGo)">&#9208; Pause</button>
             <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">&#9728;</button>
             <a href="/" class="nav-link">&#8592; Monitor</a>
         </div>
@@ -188,6 +189,42 @@
     <script>
         const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
         let socSchedule = { enabled: false, entries: [] };
+        let paused = false;
+
+        function readErrorText() {
+            return paused ? 'Current: (paused)' : 'Current: (read error)';
+        }
+
+        function renderPause() {
+            const btn = document.getElementById('pause-btn');
+            btn.textContent = paused ? '\u25b6 Resume polling' : '\u23f8 Pause';
+            btn.classList.toggle('paused', paused);
+        }
+
+        async function loadPause() {
+            try {
+                const resp = await fetch('/api/pause');
+                paused = (await resp.json()).paused;
+            } catch (e) {}
+            renderPause();
+        }
+
+        async function togglePause() {
+            try {
+                const resp = await fetch('/api/pause', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paused: !paused }),
+                });
+                paused = (await resp.json()).paused;
+            } catch (e) {
+                return;
+            }
+            renderPause();
+            loadSettings();
+            loadSocSection();
+            refreshExportStatus();
+        }
 
         async function loadSettings() {
             try {
@@ -208,7 +245,7 @@
                     document.getElementById('current-47120').textContent = 'Current: ' + v + 'W';
                     document.getElementById('val-47120').value = v;
                 } else {
-                    document.getElementById('current-47120').textContent = 'Current: (read error)';
+                    document.getElementById('current-47120').textContent = readErrorText();
                 }
 
                 if (data.grid_export_limit) {
@@ -216,7 +253,7 @@
                     document.getElementById('current-47510').textContent = 'Current: ' + v + 'W';
                     document.getElementById('val-47510').value = v;
                 } else {
-                    document.getElementById('current-47510').textContent = 'Current: (read error)';
+                    document.getElementById('current-47510').textContent = readErrorText();
                 }
             } catch (e) {
                 document.getElementById('current-47120').textContent = 'Current: (connection error)';
@@ -318,7 +355,7 @@
                     document.getElementById('current-soc-limit').textContent = 'Current: ' + data.value + '%';
                     document.getElementById('val-soc-limit').value = data.value;
                 } else {
-                    document.getElementById('current-soc-limit').textContent = 'Current: (read error)';
+                    document.getElementById('current-soc-limit').textContent = readErrorText();
                 }
             } catch(e) {
                 document.getElementById('current-soc-limit').textContent = 'Current: (connection error)';
@@ -552,6 +589,11 @@
                     el.className = 'schedule-status pending';
                     return;
                 }
+                if (s.paused) {
+                    el.textContent = 'Paused — the export limit won\u2019t be checked or corrected until you resume.';
+                    el.className = 'schedule-status pending';
+                    return;
+                }
                 if (!s.active) {
                     el.textContent = 'No enabled entries — nothing is being applied.';
                     el.className = 'schedule-status pending';
@@ -593,9 +635,11 @@
             refreshExportStatus();
         }
 
-        loadSettings();
-        loadSocSection();
-        loadExportSection();
+        loadPause().then(() => {
+            loadSettings();
+            loadSocSection();
+            loadExportSection();
+        });
         setInterval(refreshExportStatus, 30000);
     </script>
 </body>

@@ -16,6 +16,7 @@
                 <div class="dot" id="status-dot"></div>
                 <span id="status-text">Connecting...</span>
             </div>
+            <button id="pause-btn" class="theme-btn pause-btn" onclick="togglePause()" title="Stop all inverter communication (e.g. while using SolarGo)">&#9208; Pause</button>
             <button id="resume-btn" class="resume-btn" style="display:none" onclick="resumeAutoScroll()">&#8595; Resume</button>
             <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">&#9728;</button>
             <a href="/settings" class="nav-link">Settings &#9881;</a>
@@ -34,6 +35,8 @@
         let ws = null;
         let reconnectTimer = null;
         let autoScroll = true;
+        let paused = false;
+        let wsConnected = false;
 
         log.addEventListener('scroll', () => {
             const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
@@ -150,13 +153,31 @@
         }
 
         function setConnected(connected) {
-            if (connected) {
-                statusDot.classList.add('live');
-                statusText.textContent = 'Live';
-            } else {
-                statusDot.classList.remove('live');
-                statusText.textContent = 'Disconnected';
-            }
+            wsConnected = connected;
+            renderStatus();
+        }
+
+        function renderStatus() {
+            statusDot.classList.toggle('live', wsConnected && !paused);
+            statusDot.classList.toggle('paused', wsConnected && paused);
+            statusText.textContent = !wsConnected ? 'Disconnected' : (paused ? 'Paused' : 'Live');
+            const btn = document.getElementById('pause-btn');
+            btn.textContent = paused ? '\u25b6 Resume polling' : '\u23f8 Pause';
+            btn.classList.toggle('paused', paused);
+        }
+
+        async function togglePause() {
+            try {
+                const resp = await fetch('/api/pause', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paused: !paused }),
+                });
+                const result = await resp.json();
+                // The server also broadcasts this; set it here in case the socket is down.
+                paused = result.paused;
+                renderStatus();
+            } catch (e) {}
         }
 
         function connect() {
@@ -182,6 +203,9 @@
                     }
                 } else if (msg.type === 'update') {
                     appendReading(msg);
+                } else if (msg.type === 'status') {
+                    paused = msg.paused;
+                    renderStatus();
                 }
             };
 

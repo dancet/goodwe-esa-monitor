@@ -116,6 +116,11 @@ _modbus_lock_obj: asyncio.Lock | None = None
 MODBUS_TIMEOUT = 3
 MODBUS_RETRIES = 1
 MAX_POLL_FAILURES = 3  # per cycle, before giving up until the next poll
+# When paused, all Modbus traffic stops and the socket is closed, freeing the
+# dongle's single TCP slot for SolarGo. Deliberately not persisted: a restart
+# resumes, so a forgotten pause can't silently stop the schedules for good.
+_paused: bool = False
+PAUSED_ERROR = "Inverter communication is paused"
 
 
 def _modbus_lock() -> asyncio.Lock:
@@ -206,6 +211,8 @@ async def _read_monitor_registers() -> dict:
 
 
 async def read_inverter_data():
+    if _paused:
+        return None
     async with _modbus_lock():
         data = await _read_monitor_registers()
 
@@ -244,6 +251,11 @@ async def soc_scheduler():
                     if entry["day"] == current_day and entry["time"] == current_time:
                         key = (entry["day"], entry["time"])
                         if _scheduler_last_applied.get(key) != today:
+                            if _paused:
+                                print(f"[soc_scheduler] Skipping {entry['day']}@{entry['time']} "
+                                      f"value={entry['value']}: paused")
+                                _scheduler_last_applied[key] = today
+                                continue
                             print(f"[soc_scheduler] Firing: day={entry['day']} time={entry['time']} value={entry['value']}")
                             success = await write_register_raw(SOC_LIMIT_REGISTER, entry["value"])
                             print(f"[soc_scheduler] Write result: {success}")
@@ -375,6 +387,10 @@ async def _reconcile_export_limit(now: datetime) -> None:
         _export_state["last_action"] = "schedule disabled"
         return
 
+    if _paused:
+        _export_state["last_action"] = "paused — will resume reconciling when unpaused"
+        return
+
     slot = _active_slot(schedule.get("entries", []), now)
     if slot is None:
         _export_state["last_action"] = "no enabled entries"
@@ -473,19 +489,26 @@ async def inverter_poller():
                     'data': data,
                 }
                 history.append(reading)
-
-                dead = []
-                for ws in list(active_connections):
-                    try:
-                        await ws.send_json(reading)
-                    except Exception:
-                        dead.append(ws)
-                for ws in dead:
-                    active_connections.discard(ws)
+                await _broadcast(reading)
         except Exception:
             pass
 
         await asyncio.sleep(config['poll_interval'])
+
+
+async def _broadcast(msg: dict) -> None:
+    dead = []
+    for ws in list(active_connections):
+        try:
+            await ws.send_json(msg)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        active_connections.discard(ws)
+
+
+def _status_message() -> dict:
+    return {"type": "status", "paused": _paused}
 
 
 @asynccontextmanager
@@ -523,6 +546,7 @@ async def settings_page():
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     active_connections.add(websocket)
+    await websocket.send_json(_status_message())
 
     last_50 = list(history)[-50:]
     if last_50:
@@ -538,6 +562,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 async def read_register_raw(address: int):
+    if _paused:
+        return None
     async with _modbus_lock():
         client = await _get_client()
         if client is None:
@@ -560,6 +586,8 @@ async def read_register_raw(address: int):
 
 
 async def write_register_raw(address: int, raw_value: int) -> bool:
+    if _paused:
+        return False
     async with _modbus_lock():
         client = await _get_client()
         if client is None:
@@ -579,6 +607,28 @@ async def write_register_raw(address: int, raw_value: int) -> bool:
             print(f"[modbus] write {address}={raw_value} failed: {e}")
             _reset_client()
             return False
+
+
+@app.get("/api/pause")
+async def get_pause():
+    return {"paused": _paused}
+
+
+class PauseWrite(BaseModel):
+    paused: bool
+
+
+@app.post("/api/pause")
+async def post_pause(body: PauseWrite):
+    global _paused
+    _paused = body.paused
+    if _paused:
+        # Wait for any in-flight request, then release the connection.
+        async with _modbus_lock():
+            _reset_client()
+    print(f"[pause] Inverter communication {'paused' if _paused else 'resumed'}")
+    await _broadcast(_status_message())
+    return {"success": True, "paused": _paused}
 
 
 @app.get("/api/debug/schedule")
@@ -623,6 +673,8 @@ class SocLimitWrite(BaseModel):
 async def post_soc_limit(body: SocLimitWrite):
     if not (0 <= body.value <= 100):
         return {"success": False, "error": "Value must be 0–100"}
+    if _paused:
+        return {"success": False, "error": PAUSED_ERROR}
     success = await write_register_raw(SOC_LIMIT_REGISTER, body.value)
     if not success:
         return {"success": False, "error": "Write failed"}
@@ -732,6 +784,7 @@ async def get_export_schedule_status():
     return {
         "server_time": now.strftime('%Y-%m-%d %H:%M:%S %Z'),
         "enabled": schedule.get("enabled", False),
+        "paused": _paused,
         "active": _describe_slot(_active_slot(entries, now)),
         "next": _describe_slot(_next_slot(entries, now)),
         "override": (
@@ -794,6 +847,8 @@ async def post_settings(body: SettingsWrite):
             return {"success": False, "error": "Value out of range (0 to 65535)"}
         raw = value
 
+    if _paused:
+        return {"success": False, "error": PAUSED_ERROR}
     success = await write_register_raw(register, raw)
 
     if success:
