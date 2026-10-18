@@ -109,6 +109,20 @@ history: deque = deque(maxlen=500)
 active_connections: set[WebSocket] = set()
 update_count: int = 0
 _modbus_client: AsyncModbusTcpClient | None = None
+# Serialises all Modbus traffic: the poller, schedulers and API share one
+# connection, and a reset in one must not close the socket under another.
+# Created lazily: on Python <3.10 a Lock binds to the loop current at creation.
+_modbus_lock_obj: asyncio.Lock | None = None
+MODBUS_TIMEOUT = 3
+MODBUS_RETRIES = 1
+MAX_POLL_FAILURES = 3  # per cycle, before giving up until the next poll
+
+
+def _modbus_lock() -> asyncio.Lock:
+    global _modbus_lock_obj
+    if _modbus_lock_obj is None:
+        _modbus_lock_obj = asyncio.Lock()
+    return _modbus_lock_obj
 
 
 def decode_register_value(registers, count, scale, signed=True):
@@ -138,8 +152,8 @@ async def _get_client() -> AsyncModbusTcpClient | None:
     client = AsyncModbusTcpClient(
         host=config['inverter_ip'],
         port=config['modbus_port'],
-        timeout=10,
-        retries=3,
+        timeout=MODBUS_TIMEOUT,
+        retries=MODBUS_RETRIES,
     )
     if await client.connect():
         _modbus_client = client
@@ -148,13 +162,15 @@ async def _get_client() -> AsyncModbusTcpClient | None:
     return None
 
 
-async def read_inverter_data():
-    client = await _get_client()
-    if client is None:
-        return None
-
+async def _read_monitor_registers() -> dict:
+    """Read each monitor register, skipping (not aborting on) failures so one
+    bad read doesn't blank every value after it. Caller must hold _modbus_lock."""
     data = {}
+    failures = 0
+    client = await _get_client()
     for name, (address, count, scale, unit, _) in MONITOR_REGISTERS.items():
+        if client is None:
+            break
         await asyncio.sleep(0)  # yield between reads so the event loop can handle incoming connections
         try:
             result = await client.read_holding_registers(
@@ -162,22 +178,36 @@ async def read_inverter_data():
                 count=count,
                 slave=config['slave_id'],
             )
-            if not result.isError():
-                value = decode_register_value(
-                    result.registers, count, scale,
-                    signed=(name in SIGNED_REGISTERS),
-                )
-                # Sanity checks
-                if name == 'vbattery' and (value < 40 or value > 600):
-                    continue
-                if name == 'battery_soc' and (value < 0 or value > 100):
-                    continue
-                if name == 'bms_temperature' and (value < -20 or value > 80):
-                    continue
-                data[name] = value
-        except Exception:
+        except Exception as e:
+            failures += 1
+            print(f"[poller] {name} ({address}) failed: {e}")
             _reset_client()
-            break
+            if failures >= MAX_POLL_FAILURES:
+                print(f"[poller] {failures} failures this cycle, giving up until next poll")
+                break
+            client = await _get_client()
+            continue
+        if result.isError():
+            print(f"[poller] {name} ({address}) error response: {result}")
+            continue
+        value = decode_register_value(
+            result.registers, count, scale,
+            signed=(name in SIGNED_REGISTERS),
+        )
+        # Sanity checks
+        if name == 'vbattery' and (value < 40 or value > 600):
+            continue
+        if name == 'battery_soc' and (value < 0 or value > 100):
+            continue
+        if name == 'bms_temperature' and (value < -20 or value > 80):
+            continue
+        data[name] = value
+    return data
+
+
+async def read_inverter_data():
+    async with _modbus_lock():
+        data = await _read_monitor_registers()
 
     # Compute house load from energy balance: battery + pv - grid_export
     # Works in both grid-connected and backup modes
@@ -508,37 +538,47 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 async def read_register_raw(address: int):
-    client = await _get_client()
-    if client is None:
-        return None
-    try:
-        result = await client.read_holding_registers(
-            address=address,
-            count=1,
-            slave=config['slave_id'],
-        )
-        if not result.isError():
-            return result.registers[0]
-        return None
-    except Exception:
-        _reset_client()
-        return None
+    async with _modbus_lock():
+        client = await _get_client()
+        if client is None:
+            print(f"[modbus] read {address}: not connected")
+            return None
+        try:
+            result = await client.read_holding_registers(
+                address=address,
+                count=1,
+                slave=config['slave_id'],
+            )
+            if not result.isError():
+                return result.registers[0]
+            print(f"[modbus] read {address} error response: {result}")
+            return None
+        except Exception as e:
+            print(f"[modbus] read {address} failed: {e}")
+            _reset_client()
+            return None
 
 
 async def write_register_raw(address: int, raw_value: int) -> bool:
-    client = await _get_client()
-    if client is None:
-        return False
-    try:
-        result = await client.write_register(
-            address=address,
-            value=raw_value,
-            slave=config['slave_id'],
-        )
-        return not result.isError()
-    except Exception:
-        _reset_client()
-        return False
+    async with _modbus_lock():
+        client = await _get_client()
+        if client is None:
+            print(f"[modbus] write {address}: not connected")
+            return False
+        try:
+            result = await client.write_register(
+                address=address,
+                value=raw_value,
+                slave=config['slave_id'],
+            )
+            if result.isError():
+                print(f"[modbus] write {address}={raw_value} error response: {result}")
+                return False
+            return True
+        except Exception as e:
+            print(f"[modbus] write {address}={raw_value} failed: {e}")
+            _reset_client()
+            return False
 
 
 @app.get("/api/debug/schedule")
@@ -800,7 +840,8 @@ async def post_config(body: ConfigWrite):
     config['slave_id'] = body.slave_id
     config['poll_interval'] = body.poll_interval
     _save_config()
-    _reset_client()
+    async with _modbus_lock():
+        _reset_client()
 
     return {"success": True}
 
