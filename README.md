@@ -1,6 +1,6 @@
 # GoodWe ESA Monitor
 
-A live web monitor for GoodWe ESA hybrid inverter/battery systems. Reads data via Modbus TCP and displays it in a real-time dashboard with WebSocket streaming. Includes a settings page for adjusting inverter registers.
+A live web monitor for GoodWe ESA hybrid inverter/battery systems. Reads data via Modbus TCP and displays it in a real-time dashboard with WebSocket streaming. Includes a settings page for adjusting inverter registers, and a [macOS menu bar companion app](#macos-menu-bar-app).
 
 <img src="goodwe-esa-monitor.png" width="600" alt="Monitor dashboard">
 <img src="goodwe-esa-monitor-settings.png" width="600" alt="Settings page">
@@ -56,6 +56,29 @@ Deploy as a Stack by pasting in `docker-compose.yml`. Set `INVERTER_IP` (and any
 Visit http://localhost:8765/settings to:
 - Change the inverter connection details (IP, port, slave ID)
 - Read and write inverter registers (Meter Target Power Offset, Grid Export Limit)
+
+---
+
+## macOS menu bar app
+
+`macos/` contains a native companion app (macOS 13 Ventura or later) that keeps the key figures in your menu bar: 🔋 battery SoC, ☀️ PV power, ↗️ grid export (+ exporting, − importing) and 🏠 house load.
+
+<img src="goodwe-esa-monitor-menubar.png" width="420" alt="Menu bar app, single row and 2×2 grid layouts">
+
+**How it works:** the app subscribes to this web app's `/ws` WebSocket stream — the same live feed the dashboard uses — rather than talking Modbus to the inverter. The dongle only accepts one TCP connection, so the web app stays the single point of contact and the menu bar app also reflects its pause state. Values grey out if no update arrives for 60 seconds, and the app reconnects automatically after sleep or a server restart. Clicking it shows the full readings, last update time, and links to the dashboard and settings.
+
+**Build and install** (needs Xcode or the Command Line Tools):
+
+```bash
+macos/build_app.sh
+cp -R "macos/build/GoodWe Monitor.app" /Applications/
+```
+
+On first launch the Settings window opens. Enter the host running the web app (port 8765 by default), then choose:
+- a single-row or 2×2 grid layout
+- kW (one decimal place) or W
+- whether to show icons and unit labels
+- launch at login
 
 ---
 
