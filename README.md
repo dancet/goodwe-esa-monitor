@@ -71,7 +71,7 @@ Single row (kW):
 
 <img src="goodwe-esa-monitor-menubar-grid.png" width="420" alt="Menu bar app, 2×2 grid layout in W">
 
-**How it works:** the app subscribes to this web app's `/ws` WebSocket stream — the same live feed the dashboard uses — rather than talking Modbus to the inverter. The dongle only accepts one TCP connection, so the web app stays the single point of contact and the menu bar app also reflects its pause state. Values grey out if no update arrives for 60 seconds, and the app reconnects automatically after sleep or a server restart. Clicking it shows the full readings, last update time, and links to the dashboard and settings.
+**How it works:** the app subscribes to this web app's `/ws` WebSocket stream — the same live feed the dashboard uses — rather than talking Modbus to the inverter. The dongle only accepts one TCP connection, so the web app stays the single point of contact and the menu bar app also reflects its pause state. A slim bar at the left fills from bottom to top between updates and empties when one arrives, so you can tell it's live even when the values don't change; it stays full if an update is late. Values grey out after about three missed updates (20 seconds at the default poll interval), and the app reconnects automatically after sleep or a server restart. Clicking it shows the full readings, how long ago the last update arrived, and links to the dashboard and settings.
 
 **Build and install** (needs Xcode or the Command Line Tools):
 

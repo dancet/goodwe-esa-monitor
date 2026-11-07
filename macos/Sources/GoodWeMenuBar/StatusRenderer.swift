@@ -83,10 +83,23 @@ enum StatusRenderer {
         return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
     }
 
+    /// Prefixes `title` with blank space for the update indicator to sit in.
+    static func withLeadingSpace(_ title: NSAttributedString, width: CGFloat) -> NSAttributedString {
+        let font = title.length > 0
+            ? title.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+            : nil
+        let spaceFont = font ?? NSFont.menuBarFont(ofSize: 0)
+        let spaceWidth = NSAttributedString(string: " ", attributes: [.font: spaceFont]).size().width
+        let result = NSMutableAttributedString(string: " ", attributes: [.font: spaceFont, .kern: width - spaceWidth])
+        result.append(title)
+        return result
+    }
+
     /// Two rows of small text filling the menu bar's height:
     ///   🔋 SoC     ☀️ PV
     ///   ↗️ Export  🏠 Load
-    static func gridImage(_ cells: [StatusCell], showIcons: Bool, dimmed: Bool) -> NSImage {
+    /// `leadingInset` leaves room at the left for the update indicator.
+    static func gridImage(_ cells: [StatusCell], showIcons: Bool, dimmed: Bool, leadingInset: CGFloat = 0) -> NSImage {
         let barHeight = NSStatusBar.system.thickness
         let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
         let iconFont = NSFont.systemFont(ofSize: 8.5)
@@ -111,9 +124,10 @@ enum StatusRenderer {
         let rightWidth = ceil(max(sizes[1].width, sizes[3].width))
         let rowHeight = barHeight / 2
 
-        let image = NSImage(size: NSSize(width: leftWidth + columnGap + rightWidth, height: barHeight), flipped: true) { _ in
+        let width = leadingInset + leftWidth + columnGap + rightWidth
+        let image = NSImage(size: NSSize(width: width, height: barHeight), flipped: true) { _ in
             for (index, string) in strings.enumerated() {
-                let x = index % 2 == 0 ? 0 : leftWidth + columnGap
+                let x = leadingInset + (index % 2 == 0 ? 0 : leftWidth + columnGap)
                 let row = CGFloat(index / 2)
                 // Nudge the rows apart slightly; the line boxes are a touch
                 // taller than half the bar but the glyphs are not.

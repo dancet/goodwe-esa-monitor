@@ -20,12 +20,20 @@ final class MonitorClient: ObservableObject {
         case failed(String)
     }
 
-    /// The server polls every ~5s; anything this old is shown dimmed.
-    static let staleAfter: TimeInterval = 60
+    /// Readings are shown dimmed after about three missed updates, but
+    /// never sooner than this.
+    static let minStaleAfter: TimeInterval = 20
+    static let defaultInterval: TimeInterval = 5
 
     @Published private(set) var state: State = .idle
     @Published private(set) var reading: Reading?
     @Published private(set) var paused = false
+    /// Bumped on every update from the server, even if no value changed.
+    @Published private(set) var beatCount = 0
+    /// Smoothed time between updates (poll interval plus read time).
+    private(set) var expectedInterval = MonitorClient.defaultInterval
+    private var hasMeasuredInterval = false
+    private var lastUpdateAt: Date?
 
     private let session = URLSession(configuration: .default)
     private var task: URLSessionWebSocketTask?
@@ -38,7 +46,7 @@ final class MonitorClient: ObservableObject {
 
     var isStale: Bool {
         guard let reading else { return true }
-        return Date().timeIntervalSince(reading.receivedAt) > Self.staleAfter
+        return Date().timeIntervalSince(reading.receivedAt) > max(Self.minStaleAfter, expectedInterval * 3)
     }
 
     func connect(to url: URL?) {
@@ -46,6 +54,8 @@ final class MonitorClient: ObservableObject {
         self.url = url
         reading = nil
         paused = false
+        expectedInterval = Self.defaultInterval
+        hasMeasuredInterval = false
         retryDelay = 2
         guard let url else {
             state = .idle
@@ -68,6 +78,7 @@ final class MonitorClient: ObservableObject {
         disconnect()
         let gen = generation
         state = .connecting
+        lastUpdateAt = nil
         let task = session.webSocketTask(with: url)
         self.task = task
         task.resume()
@@ -124,14 +135,30 @@ final class MonitorClient: ObservableObject {
         guard let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         switch message["type"] as? String {
         case "update":
+            measureInterval()
             apply(message)
+            beatCount += 1
         case "history":
-            if let last = (message["readings"] as? [[String: Any]])?.last { apply(last) }
+            if let last = (message["readings"] as? [[String: Any]])?.last {
+                apply(last)
+                beatCount += 1
+            }
         case "status":
             paused = message["paused"] as? Bool ?? false
         default:
             break
         }
+    }
+
+    private func measureInterval() {
+        let now = Date()
+        defer { lastUpdateAt = now }
+        guard let last = lastUpdateAt else { return }
+        let gap = now.timeIntervalSince(last)
+        // Ignore gaps that can't be a normal poll (e.g. a pause in between).
+        guard gap > 1, gap < 60 else { return }
+        expectedInterval = hasMeasuredInterval ? expectedInterval * 0.7 + gap * 0.3 : gap
+        hasMeasuredInterval = true
     }
 
     private func apply(_ message: [String: Any]) {

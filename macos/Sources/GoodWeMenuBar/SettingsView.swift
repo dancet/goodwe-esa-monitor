@@ -33,6 +33,7 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
                 Toggle("Show icons", isOn: $settings.showIcons)
                 Toggle("Show unit after values", isOn: $settings.showUnits)
+                Toggle("Show update indicator", isOn: $settings.showHeartbeat)
             }
 
             Section("General") {

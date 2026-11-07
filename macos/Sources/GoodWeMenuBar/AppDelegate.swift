@@ -7,6 +7,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let settings = AppSettings.shared
     private let client = MonitorClient()
     private var statusItem: NSStatusItem!
+    private let heartbeat = HeartbeatView()
+    private var lastBeat = -1
+    /// Width of the title or image the button is showing, to place the bar.
+    private var contentWidth: CGFloat = 0
+    private var statusMenuItem: NSMenuItem?
+    private var menuTimer: Timer?
     private var settingsWindow: NSWindow?
     private var refreshTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
@@ -16,6 +22,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+        if let button = statusItem.button {
+            button.addSubview(heartbeat)
+            button.postsFrameChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification, object: button, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.layoutHeartbeat() }
+            }
+        }
 
         // objectWillChange fires before the new value lands; hopping to the
         // next run loop pass means render() sees it.
@@ -31,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .store(in: &cancellables)
 
         // Re-render periodically so a reading that stops updating gets dimmed.
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.render() }
         }
 
@@ -50,30 +65,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         button.toolTip = statusSummary
 
-        guard let reading = client.reading else {
-            button.image = nil
-            button.attributedTitle = NSAttributedString(string: client.paused ? "⚡ ⏸" : "⚡ \(Format.placeholder)")
-            return
+        let mode = heartbeatMode
+        let inset = mode == .hidden ? 0 : HeartbeatView.reservedWidth
+        func title(_ string: NSAttributedString) -> NSAttributedString {
+            inset > 0 ? StatusRenderer.withLeadingSpace(string, width: inset) : string
         }
 
-        let cells = StatusRenderer.cells(for: reading, settings: settings)
-        let dimmed = client.isStale || client.paused
-        switch settings.layout {
-        case .row:
-            button.image = nil
-            button.imagePosition = .noImage
-            var title = StatusRenderer.rowTitle(cells, showIcons: settings.showIcons, dimmed: dimmed)
-            if client.paused {
-                let paused = NSMutableAttributedString(string: "⏸ ")
-                paused.append(title)
-                title = paused
+        if let reading = client.reading {
+            let cells = StatusRenderer.cells(for: reading, settings: settings)
+            let dimmed = client.isStale || client.paused
+            switch settings.layout {
+            case .row:
+                button.image = nil
+                button.imagePosition = .noImage
+                var row = StatusRenderer.rowTitle(cells, showIcons: settings.showIcons, dimmed: dimmed)
+                if client.paused {
+                    let paused = NSMutableAttributedString(string: "⏸ ")
+                    paused.append(row)
+                    row = paused
+                }
+                button.attributedTitle = title(row)
+                contentWidth = button.attributedTitle.size().width
+            case .grid:
+                let image = StatusRenderer.gridImage(cells, showIcons: settings.showIcons,
+                                                     dimmed: dimmed, leadingInset: inset)
+                button.attributedTitle = NSAttributedString()
+                button.image = image
+                button.imagePosition = .imageOnly
+                contentWidth = image.size.width
             }
-            button.attributedTitle = title
-        case .grid:
-            button.attributedTitle = NSAttributedString()
-            button.image = StatusRenderer.gridImage(cells, showIcons: settings.showIcons, dimmed: dimmed)
-            button.imagePosition = .imageOnly
+        } else {
+            button.image = nil
+            let placeholder = NSAttributedString(
+                string: client.paused ? "⚡ ⏸" : "⚡ \(Format.placeholder)",
+                attributes: [.font: NSFont.menuBarFont(ofSize: 0)]
+            )
+            button.attributedTitle = title(placeholder)
+            contentWidth = button.attributedTitle.size().width
         }
+
+        heartbeat.setMode(mode)
+        layoutHeartbeat()
+        if mode == .live, client.beatCount != lastBeat {
+            heartbeat.beat(interval: client.expectedInterval)
+        }
+        lastBeat = client.beatCount
+    }
+
+    private var heartbeatMode: HeartbeatView.Mode {
+        if !settings.showHeartbeat || client.paused { return .hidden }
+        if client.state == .connected, client.reading != nil, !client.isStale { return .live }
+        return .idle
+    }
+
+    /// The button centres its content, so the bar goes where the reserved
+    /// space at the content's left edge ends up.
+    private func layoutHeartbeat() {
+        guard let button = statusItem.button else { return }
+        let x = ((button.bounds.width - contentWidth) / 2).rounded()
+        heartbeat.frame = NSRect(x: max(x, 0), y: 0, width: HeartbeatView.barWidth, height: button.bounds.height)
     }
 
     private var statusSummary: String {
@@ -85,13 +135,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if client.paused { return "Inverter communication paused" }
             if let reading = client.reading {
                 let stale = client.isStale ? " (stale)" : ""
-                return "Updated \(reading.timestamp ?? "?")\(stale)"
+                let time = reading.timestamp.map { " · \($0)" } ?? ""
+                return "Updated \(Self.age(since: reading.receivedAt))\(time)\(stale)"
             }
             return "Connected, waiting for data…"
         }
     }
 
+    private static func age(since date: Date) -> String {
+        let seconds = Int(Date().timeIntervalSince(date))
+        if seconds < 1 { return "just now" }
+        if seconds < 60 { return "\(seconds)s ago" }
+        return "\(seconds / 60)m ago"
+    }
+
     // MARK: - Menu
+
+    func menuWillOpen(_ menu: NSMenu) {
+        // Keep "Updated Xs ago" ticking while the menu is open; .common mode
+        // because the run loop is in event-tracking mode then.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.statusMenuItem?.title = self.statusSummary
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        menuTimer = timer
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        menuTimer?.invalidate()
+        menuTimer = nil
+    }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
@@ -109,7 +185,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(info("🏠  House  \(Format.power(reading.load, unit: unit, unitSeparator: " "))"))
             menu.addItem(.separator())
         }
-        menu.addItem(info(statusSummary))
+        let status = info(statusSummary)
+        statusMenuItem = status
+        menu.addItem(status)
         menu.addItem(.separator())
 
         let dashboard = NSMenuItem(title: "Open Dashboard", action: #selector(openDashboard), keyEquivalent: "d")

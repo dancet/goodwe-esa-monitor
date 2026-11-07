@@ -26,6 +26,7 @@ final class AppSettings: ObservableObject {
     @Published var unit: PowerUnit { didSet { defaults.set(unit.rawValue, forKey: "unit") } }
     @Published var showIcons: Bool { didSet { defaults.set(showIcons, forKey: "showIcons") } }
     @Published var showUnits: Bool { didSet { defaults.set(showUnits, forKey: "showUnits") } }
+    @Published var showHeartbeat: Bool { didSet { defaults.set(showHeartbeat, forKey: "showHeartbeat") } }
 
     private init() {
         host = defaults.string(forKey: "host") ?? ""
@@ -34,6 +35,7 @@ final class AppSettings: ObservableObject {
         unit = PowerUnit(rawValue: defaults.string(forKey: "unit") ?? "") ?? .kW
         showIcons = defaults.object(forKey: "showIcons") as? Bool ?? true
         showUnits = defaults.object(forKey: "showUnits") as? Bool ?? false
+        showHeartbeat = defaults.object(forKey: "showHeartbeat") as? Bool ?? true
     }
 
     /// Dashboard URL, e.g. http://192.168.1.20:8765/. Tolerates a pasted
