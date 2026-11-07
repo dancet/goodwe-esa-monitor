@@ -21,8 +21,9 @@ final class HeartbeatView: NSView {
     /// Space the status item content leaves at its left for the bar.
     static var reservedWidth: CGFloat { barWidth + gap }
 
-    private static let fillKey = "transform.translation.y"
-
+    /// Holds the bar in a y-up space whatever AppKit does to the hosting
+    /// layer (it flips it to match the button shortly after launch).
+    private let container = CALayer()
     private let track = CALayer()
     private let fill = CALayer()
     private(set) var mode: Mode = .hidden
@@ -34,9 +35,17 @@ final class HeartbeatView: NSView {
         // Layer-hosting: we own the layer tree, AppKit doesn't redraw it.
         layer = CALayer()
         wantsLayer = true
+        // Only opacity animates implicitly (the stale fade); everything else
+        // moves by explicit animation or not at all.
+        let still: [String: CAAction] = Dictionary(uniqueKeysWithValues:
+            ["position", "bounds", "transform", "hidden", "backgroundColor", "cornerRadius", "geometryFlipped"]
+                .map { ($0, NSNull()) })
+        for layer in [container, track, fill] { layer.actions = still }
         track.masksToBounds = true
         track.addSublayer(fill)
-        layer?.addSublayer(track)
+        container.addSublayer(track)
+        layer?.addSublayer(container)
+        fill.opacity = 0
         isHidden = true
         updateColors()
     }
@@ -51,23 +60,44 @@ final class HeartbeatView: NSView {
         layoutBar()
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        orient()
+        // AppKit sets the hosting layer's flip after the view lands.
+        DispatchQueue.main.async { [weak self] in self?.orient() }
+    }
+
+    /// Cancel out any flip above the container, so negative offsets are
+    /// always below the track.
+    private func orient() {
+        container.isGeometryFlipped = false
+        if fill.contentsAreFlipped() { container.isGeometryFlipped = true }
+    }
+
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateColors()
     }
 
     private func layoutBar() {
+        orient()
         let height = (bounds.height * 0.62).rounded()
-        let wasEmpty = fillOffset <= -track.bounds.height + 0.5
+        let trackFrame = CGRect(x: 0, y: ((bounds.height - height) / 2).rounded(),
+                                width: Self.barWidth, height: height)
+        // Renders reassign the frame constantly; only act on a real change,
+        // and keep the fill's resting (model) offset, not its animated one.
+        guard trackFrame != track.frame || container.frame != bounds else { return }
+        let current = fill.position.y - track.bounds.midY
+        let wasEmpty = current <= -track.bounds.height + 0.5
         withoutAnimation {
-            track.frame = CGRect(x: 0, y: ((bounds.height - height) / 2).rounded(),
-                                 width: Self.barWidth, height: height)
+            container.frame = bounds
+            track.frame = trackFrame
             track.cornerRadius = Self.barWidth / 2
             // The fill is a full-height pill slid up from below the track, so
             // its leading edge stays rounded while the track clips the rest.
-            fill.frame = track.bounds
+            fill.bounds = track.bounds
             fill.cornerRadius = Self.barWidth / 2
-            if wasEmpty { fill.setValue(-height, forKeyPath: Self.fillKey) }
+            setOffset(wasEmpty ? -height : min(0, max(-height, current)))
         }
     }
 
@@ -94,14 +124,14 @@ final class HeartbeatView: NSView {
             // Start empty and wait for the next update to begin filling.
             fill.removeAllAnimations()
             withoutAnimation {
-                fill.setValue(-track.bounds.height, forKeyPath: Self.fillKey)
+                setOffset(-track.bounds.height)
                 fill.opacity = 1
             }
         } else if wasLive {
             // Freeze wherever the fill got to, then fade it out to the track.
             let current = fillOffset
             fill.removeAllAnimations()
-            withoutAnimation { fill.setValue(current, forKeyPath: Self.fillKey) }
+            withoutAnimation { setOffset(current) }
             CATransaction.begin()
             CATransaction.setAnimationDuration(newMode == .hidden ? 0 : 0.6)
             fill.opacity = 0
@@ -114,32 +144,42 @@ final class HeartbeatView: NSView {
     /// simply stays full.
     func beat(interval: TimeInterval) {
         guard mode == .live else { return }
+        orient()
         let empty = -track.bounds.height
 
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             reducedMotionFull.toggle()
             fill.removeAllAnimations()
-            withoutAnimation { fill.setValue(reducedMotionFull ? 0 : empty, forKeyPath: Self.fillKey) }
+            withoutAnimation { setOffset(reducedMotionFull ? 0 : empty) }
             return
         }
 
         let interval = max(interval, 1)
         let drop = min(0.2, interval / 4)
-        let animation = CAKeyframeAnimation(keyPath: Self.fillKey)
-        animation.values = [fillOffset, empty, 0]
+        // Animate plain position: a transform key path animation got combined
+        // with a same-transaction model change and ran one height off.
+        let animation = CAKeyframeAnimation(keyPath: "position")
+        animation.values = [fillOffset, empty, 0].map { NSValue(point: fillPosition($0)) }
         animation.keyTimes = [0, NSNumber(value: drop / interval), 1]
         animation.calculationMode = .linear
         animation.duration = interval
 
         fill.removeAllAnimations()
-        withoutAnimation { fill.setValue(0, forKeyPath: Self.fillKey) } // full once it ends
+        withoutAnimation { setOffset(0) } // full once it ends
         fill.add(animation, forKey: "fill")
     }
 
     /// Where the fill is on screen right now (0 = full, -height = empty).
     private var fillOffset: CGFloat {
-        let layer = fill.presentation() ?? fill
-        return (layer.value(forKeyPath: Self.fillKey) as? NSNumber).map { CGFloat($0.doubleValue) } ?? 0
+        (fill.presentation() ?? fill).position.y - track.bounds.midY
+    }
+
+    private func fillPosition(_ offset: CGFloat) -> CGPoint {
+        CGPoint(x: track.bounds.midX, y: track.bounds.midY + offset)
+    }
+
+    private func setOffset(_ offset: CGFloat) {
+        fill.position = fillPosition(offset)
     }
 
     private func withoutAnimation(_ body: () -> Void) {
