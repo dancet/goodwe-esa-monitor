@@ -26,6 +26,18 @@ enum Metric: CaseIterable {
 enum Format {
     static let placeholder = "–"
 
+    /// Whole watts with comma thousands separators ("1,345"). Fixed rather
+    /// than locale-dependent so it can't be confused with the kW decimal point.
+    private static let wattsFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = true
+        formatter.groupingSeparator = ","
+        formatter.groupingSize = 3
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+
     static func soc(_ percent: Double?) -> String {
         guard let percent else { return placeholder }
         return String(format: "%.0f%%", percent)
@@ -35,12 +47,15 @@ enum Format {
     /// `unitSeparator` nil omits the unit entirely.
     static func power(_ watts: Double?, unit: PowerUnit, signed: Bool = false, unitSeparator: String? = nil) -> String {
         guard let watts else { return placeholder }
+        let rounded = unit == .kW
+            ? (abs(watts) / 100).rounded() / 10
+            : abs(watts).rounded()
         let magnitude = unit == .kW
-            ? String(format: "%.1f", abs(watts) / 1000)
-            : String(format: "%.0f", abs(watts))
+            ? String(format: "%.1f", rounded)
+            : wattsFormatter.string(from: NSNumber(value: rounded)) ?? String(format: "%.0f", rounded)
         var sign = ""
-        // Decide on the rounded text so 0.04 kW never shows as "+0.0".
-        if Double(magnitude) != 0 {
+        // Decide on the rounded value so 0.04 kW never shows as "+0.0".
+        if rounded != 0 {
             if watts < 0 { sign = "−" } else if signed { sign = "+" }
         }
         let suffix = unitSeparator.map { $0 + unit.rawValue } ?? ""
